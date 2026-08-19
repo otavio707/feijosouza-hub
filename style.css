@@ -12,34 +12,36 @@ h1, h2, h3, .font-heading {
   font-family: "Quicksand", sans-serif;
 }
 
-/* Selo "FS" — construção simplificada do monograma da marca, usado como
-   substituto do arquivo de logo oficial (vetor não incluído neste projeto). */
-.fs-badge {
-  width: 56px;
-  height: 56px;
-  border-radius: 999px;
-  background: #222E40;
+/* Tela de login: gradiente na cor de marca "Confiança" (#222E40) */
+.login-bg {
+  background: linear-gradient(160deg, #2c3a50 0%, #222e40 45%, #19212e 100%);
+}
+
+/* Cabeçalho do app: mesmo gradiente da tela de login, para reforçar a identidade */
+.app-header {
+  background: linear-gradient(135deg, #263449 0%, #222e40 60%, #1b2431 100%);
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 1rem;
+  padding: 1.5rem;
+  box-shadow: 0 1px 2px rgba(34, 46, 64, 0.06), 0 4px 12px rgba(34, 46, 64, 0.05);
+  border: 1px solid #E7EBF0;
+}
+
+.btn-primary {
+  background-color: #222E40;
   color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: "Quicksand", sans-serif;
-  font-weight: 700;
-  font-size: 1.1rem;
-  letter-spacing: 0.02em;
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 0.6rem 1.25rem;
+  border-radius: 999px;
+  transition: background-color 0.15s;
 }
 
-.fs-badge-sm {
-  width: 36px;
-  height: 36px;
-  font-size: 0.8rem;
-}
-
-/* Estampa — textura sutil inspirada no padrão repetido do monograma FS
-   presente no manual da marca (aplicações em canecas/crachás). */
-.brand-pattern {
-  background-image: radial-gradient(rgba(148, 152, 165, 0.18) 2px, transparent 2px);
-  background-size: 28px 28px;
+.btn-primary:hover {
+  background-color: #51606F;
 }
 
 .tab-btn {
@@ -50,6 +52,11 @@ h1, h2, h3, .font-heading {
   border-bottom: 2px solid transparent;
   white-space: nowrap;
   background: transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab-btn:hover {
+  color: #ffffff;
 }
 
 .tab-btn.active {
@@ -58,14 +65,19 @@ h1, h2, h3, .font-heading {
 }
 
 .day-toggle {
-  padding: 0.5rem 1rem;
-  border-radius: 0.5rem;
-  border: 1px solid #9498A5;
+  padding: 0.5rem 1.1rem;
+  border-radius: 999px;
+  border: 1px solid #d7dce2;
   font-size: 0.875rem;
   cursor: pointer;
   user-select: none;
   color: #51606F;
-  transition: background-color 0.15s, color 0.15s;
+  background: #fff;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.day-toggle:hover {
+  border-color: #9498A5;
 }
 
 .day-toggle.active {
