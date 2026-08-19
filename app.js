@@ -272,12 +272,54 @@ async function loadManuals() {
     document.getElementById("btn-add-manual").onclick = async () => {
       const title = document.getElementById("manual-title").value.trim();
       const category = document.getElementById("manual-category").value.trim();
-      const url = document.getElementById("manual-url").value.trim();
-      if (!title || !url) return;
-      await sb.from("manuals").insert({ title, category, url, created_by: currentUser.id });
+      const fileInput = document.getElementById("manual-file");
+      const file = fileInput.files[0];
+      const errorEl = document.getElementById("manual-upload-error");
+      errorEl.classList.add("hidden");
+
+      if (!title || !file) {
+        errorEl.textContent = "Preencha o título e escolha um arquivo.";
+        errorEl.classList.remove("hidden");
+        return;
+      }
+      if (file.size > 50 * 1024 * 1024) {
+        errorEl.textContent = "Arquivo maior que 50 MB. Envie um arquivo menor.";
+        errorEl.classList.remove("hidden");
+        return;
+      }
+
+      const btn = document.getElementById("btn-add-manual");
+      btn.disabled = true;
+      btn.textContent = "Enviando...";
+
+      const safeName = file.name
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-zA-Z0-9.\-_]/g, "_");
+      const storagePath = `${crypto.randomUUID()}-${safeName}`;
+
+      const { error: uploadError } = await sb.storage.from("manuals").upload(storagePath, file);
+      if (uploadError) {
+        errorEl.textContent = "Erro ao enviar o arquivo: " + uploadError.message;
+        errorEl.classList.remove("hidden");
+        btn.disabled = false;
+        btn.textContent = "Adicionar";
+        return;
+      }
+
+      await sb.from("manuals").insert({
+        title,
+        category,
+        storage_path: storagePath,
+        file_name: file.name,
+        created_by: currentUser.id,
+      });
+
       document.getElementById("manual-title").value = "";
       document.getElementById("manual-category").value = "";
-      document.getElementById("manual-url").value = "";
+      fileInput.value = "";
+      btn.disabled = false;
+      btn.textContent = "Adicionar";
       await loadManuals();
     };
   } else {
@@ -303,17 +345,39 @@ async function loadManuals() {
     row.className = "flex items-center justify-between p-4 gap-4";
     row.innerHTML = `
       <div class="min-w-0">
-        <a href="${m.url}" target="_blank" rel="noopener" class="font-medium text-brand-navy hover:underline">${m.title}</a>
+        <button type="button" data-open class="font-medium text-brand-navy hover:underline text-left">${m.title}</button>
         ${m.category ? `<p class="text-sm text-slate-500">${m.category}</p>` : ""}
       </div>
-      ${currentProfile?.is_admin ? `<button class="text-sm text-red-500 hover:underline shrink-0" data-id="${m.id}">Remover</button>` : ""}
+      ${currentProfile?.is_admin ? `<button class="text-sm text-red-500 hover:underline shrink-0" data-remove>Remover</button>` : ""}
     `;
-    if (currentProfile?.is_admin) {
-      row.querySelector("button").addEventListener("click", async () => {
+
+    row.querySelector("[data-open]").addEventListener("click", async () => {
+      if (!m.storage_path) {
+        if (m.url) window.open(m.url, "_blank", "noopener");
+        return;
+      }
+      // Abre a aba antes do await, para o navegador não bloquear o pop-up.
+      const newTab = window.open("", "_blank");
+      const { data, error } = await sb.storage.from("manuals").createSignedUrl(m.storage_path, 300);
+      if (error || !data?.signedUrl) {
+        if (newTab) newTab.close();
+        alert("Não foi possível abrir o arquivo agora. Tente novamente.");
+        return;
+      }
+      if (newTab) newTab.location.href = data.signedUrl;
+    });
+
+    const removeBtn = row.querySelector("[data-remove]");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", async () => {
+        if (m.storage_path) {
+          await sb.storage.from("manuals").remove([m.storage_path]);
+        }
         await sb.from("manuals").delete().eq("id", m.id);
         await loadManuals();
       });
     }
+
     list.appendChild(row);
   });
 }
