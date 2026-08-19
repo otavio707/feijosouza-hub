@@ -3,7 +3,7 @@
 // ============================================================================
 
 const cfg = window.HUB_CONFIG;
-const supabase = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+const sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
 document.getElementById("login-office-name").textContent = `Hub ${cfg.OFFICE_NAME}`;
 document.getElementById("app-office-name").textContent = `Hub ${cfg.OFFICE_NAME}`;
@@ -18,7 +18,7 @@ const WEEKDAY_LABELS = ["Seg", "Ter", "Qua", "Qui", "Sex"];
 // ----------------------------------------------------------------------------
 
 document.getElementById("btn-login").addEventListener("click", async () => {
-  const { error } = await supabase.auth.signInWithOAuth({
+  const { error } = await sb.auth.signInWithOAuth({
     provider: "azure",
     options: {
       redirectTo: window.location.origin + window.location.pathname,
@@ -29,7 +29,7 @@ document.getElementById("btn-login").addEventListener("click", async () => {
 });
 
 document.getElementById("btn-logout").addEventListener("click", async () => {
-  await supabase.auth.signOut();
+  await sb.auth.signOut();
   window.location.reload();
 });
 
@@ -40,7 +40,7 @@ function showLoginError(msg) {
 }
 
 async function boot() {
-  const { data } = await supabase.auth.getSession();
+  const { data } = await sb.auth.getSession();
   if (data.session) {
     await enterApp(data.session.user);
   } else {
@@ -72,7 +72,7 @@ async function ensureProfileLoaded(user) {
   // O gatilho do banco cria o perfil no primeiro login; pode haver uma
   // pequena corrida — tentamos algumas vezes antes de desistir.
   for (let i = 0; i < 5; i++) {
-    const { data } = await supabase.from("profiles").select("*").eq("id", user.id).maybeSingle();
+    const { data } = await sb.from("profiles").select("*").eq("id", user.id).maybeSingle();
     if (data) return data;
     await new Promise((r) => setTimeout(r, 400));
   }
@@ -153,8 +153,8 @@ async function loadHomeOffice() {
     `Semana de ${formatDateBR(isoDates[0])} a ${formatDateBR(isoDates[4])}`;
 
   const [{ data: profiles }, { data: entries }] = await Promise.all([
-    supabase.from("profiles").select("id, full_name, email").order("full_name"),
-    supabase.from("homeoffice_entries").select("user_id, entry_date").in("entry_date", isoDates),
+    sb.from("profiles").select("id, full_name, email").order("full_name"),
+    sb.from("homeoffice_entries").select("user_id, entry_date").in("entry_date", isoDates),
   ]);
 
   renderMyWeekToggles(isoDates, entries || []);
@@ -174,9 +174,9 @@ function renderMyWeekToggles(isoDates, entries) {
     btn.textContent = `${WEEKDAY_LABELS[i]} ${formatDateBR(iso).slice(0, 5)}`;
     btn.addEventListener("click", async () => {
       if (myEntrySet.has(iso)) {
-        await supabase.from("homeoffice_entries").delete().eq("user_id", currentUser.id).eq("entry_date", iso);
+        await sb.from("homeoffice_entries").delete().eq("user_id", currentUser.id).eq("entry_date", iso);
       } else {
-        await supabase.from("homeoffice_entries").insert({ user_id: currentUser.id, entry_date: iso });
+        await sb.from("homeoffice_entries").insert({ user_id: currentUser.id, entry_date: iso });
       }
       await loadHomeOffice();
     });
@@ -219,7 +219,7 @@ async function loadBirthdays() {
   document.getElementById("btn-save-birth-date").onclick = async () => {
     const value = document.getElementById("my-birth-date").value;
     if (!value) return;
-    await supabase.from("profiles").update({ birth_date: value }).eq("id", currentUser.id);
+    await sb.from("profiles").update({ birth_date: value }).eq("id", currentUser.id);
     currentProfile.birth_date = value;
     const msg = document.getElementById("birth-date-saved-msg");
     msg.classList.remove("hidden");
@@ -227,7 +227,7 @@ async function loadBirthdays() {
     await loadBirthdays();
   };
 
-  const { data: profiles } = await supabase
+  const { data: profiles } = await sb
     .from("profiles")
     .select("id, full_name, email, birth_date")
     .not("birth_date", "is", null);
@@ -267,7 +267,7 @@ async function loadBirthdays() {
 // ----------------------------------------------------------------------------
 
 async function loadAnniversary() {
-  const { data } = await supabase
+  const { data } = await sb
     .from("office_settings")
     .select("value")
     .eq("key", "office_founding_date")
@@ -292,7 +292,7 @@ async function loadAnniversary() {
     document.getElementById("btn-save-founding-date").onclick = async () => {
       const value = document.getElementById("founding-date-input").value;
       if (!value) return;
-      await supabase
+      await sb
         .from("office_settings")
         .upsert({ key: "office_founding_date", value, updated_at: new Date().toISOString() });
       await loadAnniversary();
@@ -315,7 +315,7 @@ async function loadManuals() {
       const category = document.getElementById("manual-category").value.trim();
       const url = document.getElementById("manual-url").value.trim();
       if (!title || !url) return;
-      await supabase.from("manuals").insert({ title, category, url, created_by: currentUser.id });
+      await sb.from("manuals").insert({ title, category, url, created_by: currentUser.id });
       document.getElementById("manual-title").value = "";
       document.getElementById("manual-category").value = "";
       document.getElementById("manual-url").value = "";
@@ -325,7 +325,7 @@ async function loadManuals() {
     addBox.classList.add("hidden");
   }
 
-  const { data: manuals } = await supabase
+  const { data: manuals } = await sb
     .from("manuals")
     .select("*")
     .order("category")
@@ -351,7 +351,7 @@ async function loadManuals() {
     `;
     if (currentProfile?.is_admin) {
       row.querySelector("button").addEventListener("click", async () => {
-        await supabase.from("manuals").delete().eq("id", m.id);
+        await sb.from("manuals").delete().eq("id", m.id);
         await loadManuals();
       });
     }
@@ -363,7 +363,7 @@ async function loadManuals() {
 // Início
 // ----------------------------------------------------------------------------
 
-supabase.auth.onAuthStateChange((_event, session) => {
+sb.auth.onAuthStateChange((_event, session) => {
   if (session?.user && !currentUser) {
     enterApp(session.user);
   }
