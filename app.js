@@ -63,7 +63,6 @@ async function enterApp(user) {
   await Promise.all([
     loadHomeOffice(),
     loadBirthdays(),
-    loadAnniversary(),
     loadManuals(),
   ]);
 }
@@ -263,46 +262,6 @@ async function loadBirthdays() {
 }
 
 // ----------------------------------------------------------------------------
-// Aniversário do escritório
-// ----------------------------------------------------------------------------
-
-async function loadAnniversary() {
-  const { data } = await sb
-    .from("office_settings")
-    .select("value")
-    .eq("key", "office_founding_date")
-    .maybeSingle();
-
-  const foundingDate = data?.value || null;
-  document.getElementById("founding-date-display").textContent = formatDateBR(foundingDate);
-
-  const countdownEl = document.getElementById("countdown-display");
-  if (foundingDate) {
-    const daysUntil = daysUntilNextOccurrence(foundingDate);
-    countdownEl.textContent =
-      daysUntil === 0 ? "🎉 É hoje! Parabéns, escritório!" : `Faltam ${daysUntil} dia${daysUntil === 1 ? "" : "s"} para o próximo aniversário.`;
-  } else {
-    countdownEl.textContent = "";
-  }
-
-  const adminBox = document.getElementById("admin-founding-date-box");
-  if (currentProfile?.is_admin) {
-    adminBox.classList.remove("hidden");
-    document.getElementById("founding-date-input").value = foundingDate || "";
-    document.getElementById("btn-save-founding-date").onclick = async () => {
-      const value = document.getElementById("founding-date-input").value;
-      if (!value) return;
-      await sb
-        .from("office_settings")
-        .upsert({ key: "office_founding_date", value, updated_at: new Date().toISOString() });
-      await loadAnniversary();
-    };
-  } else {
-    adminBox.classList.add("hidden");
-  }
-}
-
-// ----------------------------------------------------------------------------
 // Manuais
 // ----------------------------------------------------------------------------
 
@@ -344,7 +303,7 @@ async function loadManuals() {
     row.className = "flex items-center justify-between p-4 gap-4";
     row.innerHTML = `
       <div class="min-w-0">
-        <a href="${m.url}" target="_blank" rel="noopener" class="font-medium text-slate-900 hover:underline">${m.title}</a>
+        <a href="${m.url}" target="_blank" rel="noopener" class="font-medium text-brand-navy hover:underline">${m.title}</a>
         ${m.category ? `<p class="text-sm text-slate-500">${m.category}</p>` : ""}
       </div>
       ${currentProfile?.is_admin ? `<button class="text-sm text-red-500 hover:underline shrink-0" data-id="${m.id}">Remover</button>` : ""}

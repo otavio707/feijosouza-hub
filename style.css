@@ -4,32 +4,72 @@
   display: none !important;
 }
 
+body {
+  font-family: "Poppins", sans-serif;
+}
+
+h1, h2, h3, .font-heading {
+  font-family: "Quicksand", sans-serif;
+}
+
+/* Selo "FS" — construção simplificada do monograma da marca, usado como
+   substituto do arquivo de logo oficial (vetor não incluído neste projeto). */
+.fs-badge {
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  background: #222E40;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Quicksand", sans-serif;
+  font-weight: 700;
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+}
+
+.fs-badge-sm {
+  width: 36px;
+  height: 36px;
+  font-size: 0.8rem;
+}
+
+/* Estampa — textura sutil inspirada no padrão repetido do monograma FS
+   presente no manual da marca (aplicações em canecas/crachás). */
+.brand-pattern {
+  background-image: radial-gradient(rgba(148, 152, 165, 0.18) 2px, transparent 2px);
+  background-size: 28px 28px;
+}
+
 .tab-btn {
   padding: 0.75rem 1rem;
   font-size: 0.875rem;
   font-weight: 500;
-  color: #64748b;
+  color: #9498A5;
   border-bottom: 2px solid transparent;
   white-space: nowrap;
+  background: transparent;
 }
 
 .tab-btn.active {
-  color: #0f172a;
-  border-bottom-color: #0f172a;
+  color: #ffffff;
+  border-bottom-color: #9498A5;
 }
 
 .day-toggle {
   padding: 0.5rem 1rem;
   border-radius: 0.5rem;
-  border: 1px solid #cbd5e1;
+  border: 1px solid #9498A5;
   font-size: 0.875rem;
   cursor: pointer;
   user-select: none;
+  color: #51606F;
   transition: background-color 0.15s, color 0.15s;
 }
 
 .day-toggle.active {
-  background-color: #0f172a;
+  background-color: #222E40;
   color: white;
-  border-color: #0f172a;
+  border-color: #222E40;
 }
