@@ -12,8 +12,14 @@ let currentUser = null;
 let currentProfile = null;
 
 const WEEKDAY_LABELS = ["Seg", "Ter", "Qua", "Qui", "Sex"];
-const PERIOD_LABELS = { manha: "Manhã", tarde: "Tarde" };
-const WEEKLY_PERIOD_QUOTA = 4; // 4 períodos = 2 dias inteiros por semana
+const PERIOD_LABELS = { manha: "Manhã", tarde: "Tarde", dia: "Dia" };
+const WEEKLY_PERIOD_QUOTA = 4; // 4 períodos = 2 dias inteiros por semana (advogados)
+
+// Um dia conta como "inteiro" se tiver manhã + tarde (advogados) ou o
+// período único "dia" (estagiárias, que só trabalham meio período mesmo).
+function isFullDayPeriods(periods) {
+  return periods.includes("dia") || (periods.includes("manha") && periods.includes("tarde"));
+}
 
 // ----------------------------------------------------------------------------
 // Auth
@@ -281,7 +287,7 @@ async function loadDashboardSummary() {
       const p = (profiles || []).find((pp) => pp.id === uid);
       if (!p) return null;
       const periods = periodsByUser[uid];
-      const suffix = periods.length >= 2 ? "" : ` (${PERIOD_LABELS[periods[0]]})`;
+      const suffix = isFullDayPeriods(periods) ? "" : ` (${PERIOD_LABELS[periods[0]]})`;
       return `${p.full_name || p.email}${suffix}`;
     })
     .filter(Boolean);
@@ -341,8 +347,52 @@ function renderMyWeekToggles(isoDates, entries) {
   const container = document.getElementById("my-week-days");
   container.innerHTML = "";
 
+  const isIntern = !!currentProfile?.is_intern;
+  const instructionsEl = document.getElementById("homeoffice-instructions");
+  const subInstructionsEl = document.getElementById("homeoffice-subinstructions");
+  const quotaLabel = document.getElementById("week-quota-label");
+
   const myEntries = entries.filter((e) => e.user_id === currentUser.id);
   const myEntrySet = new Set(myEntries.map((e) => `${e.entry_date}|${e.period}`));
+
+  if (isIntern) {
+    // Estagiárias trabalham só meio período por dia: um toggle único por
+    // dia (período "dia"), sem distinção manhã/tarde e sem limite semanal.
+    if (instructionsEl) instructionsEl.textContent = "Marque os dias em que você fará home office esta semana:";
+    if (subInstructionsEl) subInstructionsEl.textContent = "";
+
+    isoDates.forEach((iso, i) => {
+      const key = `${iso}|dia`;
+      const active = myEntrySet.has(key);
+      const btn = document.createElement("button");
+      btn.className = "day-toggle" + (active ? " active" : "");
+      btn.textContent = `${WEEKDAY_LABELS[i]} ${formatDateBR(iso).slice(0, 5)}`;
+      btn.addEventListener("click", async () => {
+        if (active) {
+          await sb
+            .from("homeoffice_entries")
+            .delete()
+            .eq("user_id", currentUser.id)
+            .eq("entry_date", iso)
+            .eq("period", "dia");
+        } else {
+          await sb.from("homeoffice_entries").insert({ user_id: currentUser.id, entry_date: iso, period: "dia" });
+        }
+        await Promise.all([loadHomeOffice(), loadDashboardSummary()]);
+      });
+      container.appendChild(btn);
+    });
+
+    if (quotaLabel) quotaLabel.textContent = "";
+    return;
+  }
+
+  if (instructionsEl) {
+    instructionsEl.textContent = "Marque os períodos (manhã/tarde) em que você fará home office esta semana:";
+  }
+  if (subInstructionsEl) {
+    subInstructionsEl.textContent = "Máximo de 4 períodos por semana (equivalente a 2 dias inteiros).";
+  }
 
   isoDates.forEach((iso, i) => {
     const dayWrap = document.createElement("div");
@@ -388,7 +438,6 @@ function renderMyWeekToggles(isoDates, entries) {
     container.appendChild(dayWrap);
   });
 
-  const quotaLabel = document.getElementById("week-quota-label");
   if (quotaLabel) {
     quotaLabel.textContent = `${myEntrySet.size} de ${WEEKLY_PERIOD_QUOTA} períodos usados nesta semana (equivalente a até 2 dias inteiros).`;
   }
@@ -412,7 +461,7 @@ function renderTeamWeekTable(weekDates, profiles, entries) {
       .map((iso) => {
         const periods = entries.filter((e) => e.user_id === p.id && e.entry_date === iso).map((e) => e.period);
         let text = "";
-        if (periods.length >= 2) text = "🏠";
+        if (isFullDayPeriods(periods)) text = "🏠";
         else if (periods.includes("manha")) text = "Manhã";
         else if (periods.includes("tarde")) text = "Tarde";
         return `<td class="py-2 px-2 text-center text-xs">${text}</td>`;

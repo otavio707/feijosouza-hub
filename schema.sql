@@ -312,3 +312,20 @@ alter table public.homeoffice_entries
   drop constraint if exists homeoffice_entries_user_date_period_key;
 alter table public.homeoffice_entries
   add constraint homeoffice_entries_user_date_period_key unique (user_id, entry_date, period);
+
+-- ----------------------------------------------------------------------------
+-- 13. Estagiárias passam a ter login próprio e marcam home office com um
+--     toggle simples de um período por dia (sem manhã/tarde, sem o limite de
+--     4 períodos que vale para os advogados).
+-- ----------------------------------------------------------------------------
+alter table public.profiles
+  add column if not exists is_intern boolean not null default false;
+
+alter table public.homeoffice_entries
+  drop constraint if exists homeoffice_entries_period_check;
+alter table public.homeoffice_entries
+  add constraint homeoffice_entries_period_check check (period in ('manha', 'tarde', 'dia'));
+
+-- Depois que a estagiária fizer login pelo menos uma vez, marque-a como
+-- estagiária rodando (troque o e-mail):
+-- update public.profiles set is_intern = true where email = 'email.da.estagiaria@feijosouza.com.br';
