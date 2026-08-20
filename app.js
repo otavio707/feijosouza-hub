@@ -12,6 +12,8 @@ let currentUser = null;
 let currentProfile = null;
 
 const WEEKDAY_LABELS = ["Seg", "Ter", "Qua", "Qui", "Sex"];
+const PERIOD_LABELS = { manha: "Manhã", tarde: "Tarde" };
+const WEEKLY_PERIOD_QUOTA = 4; // 4 períodos = 2 dias inteiros por semana
 
 // ----------------------------------------------------------------------------
 // Auth
@@ -104,7 +106,10 @@ function goToPanel(key) {
 // ----------------------------------------------------------------------------
 
 function toISODate(d) {
-  return d.toISOString().slice(0, 10);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function getMondayOfWeek(date) {
@@ -173,6 +178,81 @@ function escapeHtml(str) {
 }
 
 // ----------------------------------------------------------------------------
+// Dias úteis / feriados nacionais (para o cálculo de férias)
+// ----------------------------------------------------------------------------
+
+// Data da Páscoa (algoritmo de Meeus/Jones/Butcher)
+function easterDateForYear(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+
+function getBrazilHolidays(year) {
+  const fixed = [
+    [1, 1],   // Confraternização Universal
+    [4, 21],  // Tiradentes
+    [5, 1],   // Dia do Trabalho
+    [9, 7],   // Independência do Brasil
+    [10, 12], // Nossa Senhora Aparecida
+    [11, 2],  // Finados
+    [11, 15], // Proclamação da República
+    [11, 20], // Consciência Negra
+    [12, 25], // Natal
+  ];
+  const holidays = fixed.map(([m, d]) => toISODate(new Date(year, m - 1, d)));
+
+  const easter = easterDateForYear(year);
+  const offset = (days) => {
+    const d = new Date(easter);
+    d.setDate(d.getDate() + days);
+    return toISODate(d);
+  };
+  holidays.push(offset(-48)); // Segunda de Carnaval
+  holidays.push(offset(-47)); // Terça de Carnaval
+  holidays.push(offset(-2)); // Sexta-feira Santa
+  holidays.push(offset(60)); // Corpus Christi
+
+  return new Set(holidays);
+}
+
+// Conta os dias úteis entre duas datas ISO (inclusive), excluindo fins de
+// semana e feriados nacionais.
+function countBusinessDays(startIso, endIso) {
+  if (!startIso || !endIso || endIso < startIso) return 0;
+  const [sy, sm, sd] = startIso.split("-").map(Number);
+  const [ey, em, ed] = endIso.split("-").map(Number);
+  const cur = new Date(sy, sm - 1, sd);
+  const end = new Date(ey, em - 1, ed);
+  const holidaysByYear = {};
+  let count = 0;
+  while (cur <= end) {
+    const year = cur.getFullYear();
+    if (!holidaysByYear[year]) holidaysByYear[year] = getBrazilHolidays(year);
+    const dow = cur.getDay();
+    if (dow !== 0 && dow !== 6 && !holidaysByYear[year].has(toISODate(cur))) count++;
+    cur.setDate(cur.getDate() + 1);
+  }
+  return count;
+}
+
+function formatBusinessDays(days) {
+  return days === 1 ? "1 dia útil" : `${days} dias úteis`;
+}
+
+// ----------------------------------------------------------------------------
 // Página inicial (resumo do dia)
 // ----------------------------------------------------------------------------
 
@@ -185,15 +265,26 @@ async function loadDashboardSummary() {
   const [{ data: profiles }, { data: entries }, { data: birthProfiles }, { data: announcements }] =
     await Promise.all([
       sb.from("profiles").select("id, full_name, email"),
-      sb.from("homeoffice_entries").select("user_id").eq("entry_date", todayISO),
+      sb.from("homeoffice_entries").select("user_id, period").eq("entry_date", todayISO),
       sb.from("profiles").select("full_name, email, birth_date").not("birth_date", "is", null),
       sb.from("announcements").select("title, body, created_at").order("created_at", { ascending: false }).limit(1),
     ]);
 
-  const names = (entries || [])
-    .map((e) => (profiles || []).find((p) => p.id === e.user_id))
-    .filter(Boolean)
-    .map((p) => p.full_name || p.email);
+  const periodsByUser = {};
+  (entries || []).forEach((e) => {
+    if (!periodsByUser[e.user_id]) periodsByUser[e.user_id] = [];
+    periodsByUser[e.user_id].push(e.period);
+  });
+
+  const names = Object.keys(periodsByUser)
+    .map((uid) => {
+      const p = (profiles || []).find((pp) => pp.id === uid);
+      if (!p) return null;
+      const periods = periodsByUser[uid];
+      const suffix = periods.length >= 2 ? "" : ` (${PERIOD_LABELS[periods[0]]})`;
+      return `${p.full_name || p.email}${suffix}`;
+    })
+    .filter(Boolean);
 
   document.getElementById("summary-homeoffice-count").textContent =
     names.length === 0 ? "Ninguém hoje" : `${names.length} em home office`;
@@ -239,7 +330,7 @@ async function loadHomeOffice() {
 
   const [{ data: profiles }, { data: entries }] = await Promise.all([
     sb.from("profiles").select("id, full_name, email").order("full_name"),
-    sb.from("homeoffice_entries").select("user_id, entry_date").in("entry_date", isoDates),
+    sb.from("homeoffice_entries").select("user_id, entry_date, period").in("entry_date", isoDates),
   ]);
 
   renderMyWeekToggles(isoDates, entries || []);
@@ -249,24 +340,58 @@ async function loadHomeOffice() {
 function renderMyWeekToggles(isoDates, entries) {
   const container = document.getElementById("my-week-days");
   container.innerHTML = "";
-  const myEntrySet = new Set(
-    entries.filter((e) => e.user_id === currentUser.id).map((e) => e.entry_date)
-  );
+
+  const myEntries = entries.filter((e) => e.user_id === currentUser.id);
+  const myEntrySet = new Set(myEntries.map((e) => `${e.entry_date}|${e.period}`));
 
   isoDates.forEach((iso, i) => {
-    const btn = document.createElement("button");
-    btn.className = "day-toggle" + (myEntrySet.has(iso) ? " active" : "");
-    btn.textContent = `${WEEKDAY_LABELS[i]} ${formatDateBR(iso).slice(0, 5)}`;
-    btn.addEventListener("click", async () => {
-      if (myEntrySet.has(iso)) {
-        await sb.from("homeoffice_entries").delete().eq("user_id", currentUser.id).eq("entry_date", iso);
-      } else {
-        await sb.from("homeoffice_entries").insert({ user_id: currentUser.id, entry_date: iso });
-      }
-      await Promise.all([loadHomeOffice(), loadDashboardSummary()]);
+    const dayWrap = document.createElement("div");
+    dayWrap.className = "flex flex-col items-center gap-1.5";
+
+    const label = document.createElement("p");
+    label.className = "text-xs text-brand-slate";
+    label.textContent = `${WEEKDAY_LABELS[i]} ${formatDateBR(iso).slice(0, 5)}`;
+    dayWrap.appendChild(label);
+
+    const periodRow = document.createElement("div");
+    periodRow.className = "flex flex-col gap-1";
+
+    ["manha", "tarde"].forEach((period) => {
+      const key = `${iso}|${period}`;
+      const active = myEntrySet.has(key);
+      const btn = document.createElement("button");
+      btn.className = "day-toggle" + (active ? " active" : "");
+      btn.textContent = PERIOD_LABELS[period];
+      btn.addEventListener("click", async () => {
+        if (active) {
+          await sb
+            .from("homeoffice_entries")
+            .delete()
+            .eq("user_id", currentUser.id)
+            .eq("entry_date", iso)
+            .eq("period", period);
+        } else {
+          if (myEntrySet.size >= WEEKLY_PERIOD_QUOTA) {
+            alert(
+              `Você já atingiu o limite de ${WEEKLY_PERIOD_QUOTA} períodos (2 dias inteiros) de home office nesta semana.`
+            );
+            return;
+          }
+          await sb.from("homeoffice_entries").insert({ user_id: currentUser.id, entry_date: iso, period });
+        }
+        await Promise.all([loadHomeOffice(), loadDashboardSummary()]);
+      });
+      periodRow.appendChild(btn);
     });
-    container.appendChild(btn);
+
+    dayWrap.appendChild(periodRow);
+    container.appendChild(dayWrap);
   });
+
+  const quotaLabel = document.getElementById("week-quota-label");
+  if (quotaLabel) {
+    quotaLabel.textContent = `${myEntrySet.size} de ${WEEKLY_PERIOD_QUOTA} períodos usados nesta semana (equivalente a até 2 dias inteiros).`;
+  }
 }
 
 function renderTeamWeekTable(weekDates, profiles, entries) {
@@ -285,8 +410,12 @@ function renderTeamWeekTable(weekDates, profiles, entries) {
     const nameCell = `<td class="py-2 pr-4 font-medium">${escapeHtml(p.full_name || p.email)}</td>`;
     const dayCells = isoDates
       .map((iso) => {
-        const has = entries.some((e) => e.user_id === p.id && e.entry_date === iso);
-        return `<td class="py-2 px-2 text-center">${has ? "🏠" : ""}</td>`;
+        const periods = entries.filter((e) => e.user_id === p.id && e.entry_date === iso).map((e) => e.period);
+        let text = "";
+        if (periods.length >= 2) text = "🏠";
+        else if (periods.includes("manha")) text = "Manhã";
+        else if (periods.includes("tarde")) text = "Tarde";
+        return `<td class="py-2 px-2 text-center text-xs">${text}</td>`;
       })
       .join("");
     row.innerHTML = nameCell + dayCells;
@@ -410,9 +539,27 @@ async function loadAnnouncements() {
 // ----------------------------------------------------------------------------
 
 async function loadVacations() {
+  const startInput = document.getElementById("vacation-start");
+  const endInput = document.getElementById("vacation-end");
+  const previewEl = document.getElementById("vacation-days-preview");
+
+  const updatePreview = () => {
+    if (!previewEl) return;
+    const start = startInput.value;
+    const end = endInput.value;
+    if (!start || !end || end < start) {
+      previewEl.textContent = "";
+      return;
+    }
+    previewEl.textContent = `${formatBusinessDays(countBusinessDays(start, end))} nesse período.`;
+  };
+  startInput.oninput = updatePreview;
+  endInput.oninput = updatePreview;
+  updatePreview();
+
   document.getElementById("btn-add-vacation").onclick = async () => {
-    const start = document.getElementById("vacation-start").value;
-    const end = document.getElementById("vacation-end").value;
+    const start = startInput.value;
+    const end = endInput.value;
     const errorEl = document.getElementById("vacation-error");
     errorEl.classList.add("hidden");
 
@@ -437,8 +584,9 @@ async function loadVacations() {
       return;
     }
 
-    document.getElementById("vacation-start").value = "";
-    document.getElementById("vacation-end").value = "";
+    startInput.value = "";
+    endInput.value = "";
+    if (previewEl) previewEl.textContent = "";
     await loadVacations();
   };
 
@@ -457,12 +605,13 @@ async function loadVacations() {
 
   vacations.forEach((v) => {
     const name = v.profiles?.full_name || v.profiles?.email || "—";
+    const days = countBusinessDays(v.start_date, v.end_date);
     const row = document.createElement("div");
     row.className = "flex items-center justify-between p-4 gap-4";
     row.innerHTML = `
       <div>
         <p class="font-medium">${escapeHtml(name)}</p>
-        <p class="text-sm text-slate-500">${formatDateBR(v.start_date)} a ${formatDateBR(v.end_date)}</p>
+        <p class="text-sm text-slate-500">${formatDateBR(v.start_date)} a ${formatDateBR(v.end_date)} · ${formatBusinessDays(days)}</p>
       </div>
       ${v.user_id === currentUser.id ? `<button class="text-sm text-red-500 hover:underline shrink-0" data-remove>Remover</button>` : ""}
     `;

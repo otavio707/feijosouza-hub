@@ -158,8 +158,10 @@
         <p id="week-range" class="text-sm text-brand-slate mb-4"></p>
 
         <div class="card mb-6">
-          <p class="text-sm font-medium mb-3">Marque os dias em que você fará home office esta semana:</p>
-          <div id="my-week-days" class="flex flex-wrap gap-2"></div>
+          <p class="text-sm font-medium mb-1">Marque os períodos (manhã/tarde) em que você fará home office esta semana:</p>
+          <p class="text-xs text-brand-mist mb-3">Máximo de 4 períodos por semana (equivalente a 2 dias inteiros).</p>
+          <div id="my-week-days" class="flex flex-wrap gap-4"></div>
+          <p id="week-quota-label" class="text-xs text-brand-slate mt-4"></p>
         </div>
 
         <div class="card overflow-x-auto">
@@ -201,7 +203,7 @@
         <p class="text-sm text-brand-slate mb-4">Comunicados e novidades para toda a equipe.</p>
 
         <div id="admin-add-announcement-box" class="card mb-6 hidden">
-          <p class="text-sm font-medium mb-3">Publicar aviso (somente administradores)</p>
+          <p class="text-sm font-medium mb-3">Publicar aviso</p>
           <input id="announcement-title" type="text" placeholder="Título" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mb-3" />
           <textarea id="announcement-body" placeholder="Mensagem" rows="3" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full"></textarea>
           <button type="button" id="btn-add-announcement" class="mt-3 btn-primary">Publicar</button>
@@ -231,6 +233,7 @@
             </div>
             <button type="button" id="btn-add-vacation" class="btn-primary">Salvar</button>
           </div>
+          <p id="vacation-days-preview" class="text-sm text-brand-slate mt-3"></p>
           <p id="vacation-error" class="text-sm text-red-500 mt-2 hidden"></p>
         </div>
 
@@ -270,11 +273,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
           Voltar
         </button>
-        <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Manuais de procedimentos</h2>
-        <p class="text-sm text-brand-slate mb-4">Arquivos (Word, PDF etc.) guardados aqui no hub. Só quem estiver logado consegue abrir.</p>
+        <h2 class="font-heading text-lg font-semibold mb-4 text-brand-navy mt-3">Manuais de procedimentos</h2>
 
         <div id="admin-add-manual-box" class="card mb-6 hidden">
-          <p class="text-sm font-medium mb-3">Adicionar manual (somente administradores)</p>
+          <p class="text-sm font-medium mb-3">Adicionar manual</p>
           <div class="grid sm:grid-cols-3 gap-3">
             <input id="manual-title" type="text" placeholder="Título" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
             <input id="manual-category" type="text" placeholder="Categoria (ex.: Financeiro)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />

@@ -199,3 +199,116 @@ create policy "manuals_bucket_admin_delete"
     bucket_id = 'manuals'
     and exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin)
   );
+
+-- ----------------------------------------------------------------------------
+-- 8. ANNOUNCEMENTS — avisos do escritório (somente administradores publicam)
+-- ----------------------------------------------------------------------------
+create table if not exists public.announcements (
+  id bigint generated always as identity primary key,
+  title text not null,
+  body text not null,
+  created_by uuid references public.profiles (id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.announcements enable row level security;
+
+drop policy if exists "announcements_select_all_authenticated" on public.announcements;
+create policy "announcements_select_all_authenticated"
+  on public.announcements for select
+  to authenticated
+  using (true);
+
+drop policy if exists "announcements_admin_write" on public.announcements;
+create policy "announcements_admin_write"
+  on public.announcements for all
+  to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+-- ----------------------------------------------------------------------------
+-- 9. VACATIONS — férias de cada pessoa (cada um cadastra as próprias)
+-- ----------------------------------------------------------------------------
+create table if not exists public.vacations (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  start_date date not null,
+  end_date date not null,
+  created_at timestamptz not null default now(),
+  constraint vacations_dates_check check (end_date >= start_date)
+);
+
+alter table public.vacations enable row level security;
+
+drop policy if exists "vacations_select_all_authenticated" on public.vacations;
+create policy "vacations_select_all_authenticated"
+  on public.vacations for select
+  to authenticated
+  using (true);
+
+drop policy if exists "vacations_insert_own" on public.vacations;
+create policy "vacations_insert_own"
+  on public.vacations for insert
+  to authenticated
+  with check (auth.uid() = user_id);
+
+drop policy if exists "vacations_delete_own" on public.vacations;
+create policy "vacations_delete_own"
+  on public.vacations for delete
+  to authenticated
+  using (auth.uid() = user_id);
+
+-- ----------------------------------------------------------------------------
+-- 10. INTERN_ASSIGNMENTS — escala dos estagiários por projeto/setor
+--     (estagiários não usam login próprio; somente administradores cadastram)
+-- ----------------------------------------------------------------------------
+create table if not exists public.intern_assignments (
+  id bigint generated always as identity primary key,
+  intern_name text not null,
+  project text not null,
+  notes text,
+  created_by uuid references public.profiles (id),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.intern_assignments enable row level security;
+
+drop policy if exists "intern_assignments_select_all_authenticated" on public.intern_assignments;
+create policy "intern_assignments_select_all_authenticated"
+  on public.intern_assignments for select
+  to authenticated
+  using (true);
+
+drop policy if exists "intern_assignments_admin_write" on public.intern_assignments;
+create policy "intern_assignments_admin_write"
+  on public.intern_assignments for all
+  to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+-- ----------------------------------------------------------------------------
+-- 11. INTERN_ASSIGNMENTS — alocação passa a ser por semana (segunda-feira
+--     da semana em questão), em vez de uma lista única sem data.
+-- ----------------------------------------------------------------------------
+alter table public.intern_assignments
+  add column if not exists week_start date;
+
+-- ----------------------------------------------------------------------------
+-- 12. HOMEOFFICE_ENTRIES — passa a ser por período (manhã/tarde), permitindo
+--     até 4 períodos por semana (equivalente a 2 dias inteiros).
+-- ----------------------------------------------------------------------------
+alter table public.homeoffice_entries
+  drop constraint if exists homeoffice_entries_user_id_entry_date_key;
+
+alter table public.homeoffice_entries
+  add column if not exists period text not null default 'manha';
+
+alter table public.homeoffice_entries
+  drop constraint if exists homeoffice_entries_period_check;
+alter table public.homeoffice_entries
+  add constraint homeoffice_entries_period_check check (period in ('manha', 'tarde'));
+
+alter table public.homeoffice_entries
+  drop constraint if exists homeoffice_entries_user_date_period_key;
+alter table public.homeoffice_entries
+  add constraint homeoffice_entries_user_date_period_key unique (user_id, entry_date, period);
