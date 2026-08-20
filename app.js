@@ -145,6 +145,24 @@ function daysUntilNextOccurrence(iso) {
   return diffDays;
 }
 
+function addDaysISO(iso, days) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + days);
+  return toISODate(date);
+}
+
+function mondayOfISOWeek(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return toISODate(getMondayOfWeek(new Date(y, m - 1, d)));
+}
+
+function formatWeekRange(weekStartIso) {
+  if (!weekStartIso) return "Semana não informada";
+  const endIso = addDaysISO(weekStartIso, 4);
+  return `Semana de ${formatDateBR(weekStartIso)} a ${formatDateBR(endIso)}`;
+}
+
 function escapeHtml(str) {
   return String(str ?? "")
     .replace(/&/g, "&amp;")
@@ -467,22 +485,38 @@ async function loadInternSchedule() {
   const addBox = document.getElementById("admin-add-intern-box");
   if (currentProfile?.is_admin) {
     addBox.classList.remove("hidden");
+
+    const weekInput = document.getElementById("intern-week");
+    if (!weekInput.value) {
+      weekInput.value = toISODate(getMondayOfWeek(new Date()));
+    }
+
     document.getElementById("btn-add-intern").onclick = async () => {
       const name = document.getElementById("intern-name").value.trim();
       const project = document.getElementById("intern-project").value.trim();
       const notes = document.getElementById("intern-notes").value.trim();
-      if (!name || !project) return;
+      const weekValue = document.getElementById("intern-week").value;
+      const errorEl = document.getElementById("intern-error");
+      errorEl.classList.add("hidden");
+
+      if (!name || !project || !weekValue) {
+        errorEl.textContent = "Preencha nome, projeto/setor e a semana.";
+        errorEl.classList.remove("hidden");
+        return;
+      }
 
       await sb.from("intern_assignments").insert({
         intern_name: name,
         project,
         notes: notes || null,
+        week_start: mondayOfISOWeek(weekValue),
         created_by: currentUser.id,
       });
 
       document.getElementById("intern-name").value = "";
       document.getElementById("intern-project").value = "";
       document.getElementById("intern-notes").value = "";
+      document.getElementById("intern-week").value = toISODate(getMondayOfWeek(new Date()));
       await loadInternSchedule();
     };
   } else {
@@ -492,6 +526,7 @@ async function loadInternSchedule() {
   const { data: interns } = await sb
     .from("intern_assignments")
     .select("*")
+    .order("week_start", { ascending: false })
     .order("project")
     .order("intern_name");
 
@@ -503,7 +538,18 @@ async function loadInternSchedule() {
     return;
   }
 
+  let currentWeek;
+  let firstGroup = true;
   interns.forEach((i) => {
+    if (i.week_start !== currentWeek) {
+      currentWeek = i.week_start;
+      const header = document.createElement("p");
+      header.className = `px-4 pb-1 text-xs font-semibold uppercase tracking-wide text-brand-mist ${firstGroup ? "pt-4" : "pt-5"}`;
+      header.textContent = formatWeekRange(currentWeek);
+      list.appendChild(header);
+      firstGroup = false;
+    }
+
     const row = document.createElement("div");
     row.className = "flex items-center justify-between p-4 gap-4";
     row.innerHTML = `

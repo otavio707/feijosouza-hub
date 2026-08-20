@@ -180,7 +180,6 @@
           Voltar
         </button>
         <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Aniversários da equipe</h2>
-        <p class="text-sm text-brand-slate mb-4">Ordenados pelo próximo aniversário a acontecer.</p>
         <div class="card mb-6">
           <p class="text-sm font-medium mb-3">Sua data de nascimento (aparece para a equipe)</p>
           <div class="flex gap-3 items-center">
@@ -218,7 +217,6 @@
           Voltar
         </button>
         <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Férias</h2>
-        <p class="text-sm text-brand-slate mb-4">Cadastre suas férias e veja quando cada um da equipe estará fora.</p>
 
         <div class="card mb-6">
           <p class="text-sm font-medium mb-3">Cadastrar período de férias</p>
@@ -246,7 +244,7 @@
           Voltar
         </button>
         <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Escala dos estagiários</h2>
-        <p class="text-sm text-brand-slate mb-4">Alocação por projeto/setor. Somente administradores editam.</p>
+        <p class="text-sm text-brand-slate mb-4">Alocação por projeto/setor, semana a semana.</p>
 
         <div id="admin-add-intern-box" class="card mb-6 hidden">
           <p class="text-sm font-medium mb-3">Adicionar alocação (somente administradores)</p>
@@ -255,6 +253,11 @@
             <input id="intern-project" type="text" placeholder="Projeto/Setor" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
             <input id="intern-notes" type="text" placeholder="Observações (opcional)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
           </div>
+          <div class="mt-3">
+            <label class="block text-xs text-brand-slate mb-1">Semana</label>
+            <input id="intern-week" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <p id="intern-error" class="text-sm text-red-500 mt-2 hidden"></p>
           <button type="button" id="btn-add-intern" class="mt-3 btn-primary">Adicionar</button>
         </div>
 
