@@ -59,10 +59,14 @@ async function enterApp(user) {
   document.getElementById("welcome-msg").textContent =
     `Olá, ${currentProfile?.full_name || user.email}`;
 
-  setupTabs();
+  setupNav();
   await Promise.all([
+    loadDashboardSummary(),
     loadHomeOffice(),
     loadBirthdays(),
+    loadAnnouncements(),
+    loadVacations(),
+    loadInternSchedule(),
     loadManuals(),
   ]);
 }
@@ -79,23 +83,24 @@ async function ensureProfileLoaded(user) {
 }
 
 // ----------------------------------------------------------------------------
-// Tabs
+// Navegação (landing page + telas em "quadrados")
 // ----------------------------------------------------------------------------
 
-function setupTabs() {
-  document.querySelectorAll(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-      document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
-      btn.classList.add("active");
-      document.getElementById(`tab-${btn.dataset.tab}`).classList.remove("hidden");
-    });
+function setupNav() {
+  document.querySelectorAll("[data-goto]").forEach((el) => {
+    el.addEventListener("click", () => goToPanel(el.dataset.goto));
   });
-  document.querySelector('.tab-btn[data-tab="homeoffice"]').classList.add("active");
+}
+
+function goToPanel(key) {
+  document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
+  const panel = document.getElementById(`panel-${key}`);
+  if (panel) panel.classList.remove("hidden");
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 // ----------------------------------------------------------------------------
-// Utilidades de data
+// Utilidades
 // ----------------------------------------------------------------------------
 
 function toISODate(d) {
@@ -140,6 +145,69 @@ function daysUntilNextOccurrence(iso) {
   return diffDays;
 }
 
+function escapeHtml(str) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// ----------------------------------------------------------------------------
+// Página inicial (resumo do dia)
+// ----------------------------------------------------------------------------
+
+async function loadDashboardSummary() {
+  const todayISO = toISODate(new Date());
+
+  document.getElementById("summary-date-label").textContent =
+    `Hoje, ${formatDateBR(todayISO).slice(0, 5)}`;
+
+  const [{ data: profiles }, { data: entries }, { data: birthProfiles }, { data: announcements }] =
+    await Promise.all([
+      sb.from("profiles").select("id, full_name, email"),
+      sb.from("homeoffice_entries").select("user_id").eq("entry_date", todayISO),
+      sb.from("profiles").select("full_name, email, birth_date").not("birth_date", "is", null),
+      sb.from("announcements").select("title, body, created_at").order("created_at", { ascending: false }).limit(1),
+    ]);
+
+  const names = (entries || [])
+    .map((e) => (profiles || []).find((p) => p.id === e.user_id))
+    .filter(Boolean)
+    .map((p) => p.full_name || p.email);
+
+  document.getElementById("summary-homeoffice-count").textContent =
+    names.length === 0 ? "Ninguém hoje" : `${names.length} em home office`;
+  document.getElementById("summary-homeoffice-names").textContent = names.join(", ");
+
+  const withDays = (birthProfiles || [])
+    .map((p) => ({ ...p, daysUntil: daysUntilNextOccurrence(p.birth_date) }))
+    .sort((a, b) => a.daysUntil - b.daysUntil);
+
+  if (withDays.length > 0) {
+    const next = withDays[0];
+    document.getElementById("summary-birthday-name").textContent = next.full_name || next.email;
+    document.getElementById("summary-birthday-sub").textContent =
+      next.daysUntil === 0
+        ? "🎉 É hoje!"
+        : `em ${next.daysUntil} dia${next.daysUntil === 1 ? "" : "s"} (${formatDateBR(next.birth_date).slice(0, 5)})`;
+  } else {
+    document.getElementById("summary-birthday-name").textContent = "—";
+    document.getElementById("summary-birthday-sub").textContent = "Ninguém cadastrou ainda";
+  }
+
+  const latest = (announcements || [])[0];
+  if (latest) {
+    document.getElementById("summary-announcement-title").textContent = latest.title;
+    document.getElementById("summary-announcement-sub").textContent =
+      latest.body.length > 60 ? latest.body.slice(0, 60) + "…" : latest.body;
+  } else {
+    document.getElementById("summary-announcement-title").textContent = "—";
+    document.getElementById("summary-announcement-sub").textContent = "Nenhum aviso publicado ainda";
+  }
+}
+
 // ----------------------------------------------------------------------------
 // Home office
 // ----------------------------------------------------------------------------
@@ -177,7 +245,7 @@ function renderMyWeekToggles(isoDates, entries) {
       } else {
         await sb.from("homeoffice_entries").insert({ user_id: currentUser.id, entry_date: iso });
       }
-      await loadHomeOffice();
+      await Promise.all([loadHomeOffice(), loadDashboardSummary()]);
     });
     container.appendChild(btn);
   });
@@ -196,7 +264,7 @@ function renderTeamWeekTable(weekDates, profiles, entries) {
   profiles.forEach((p) => {
     const row = document.createElement("tr");
     row.className = "border-b border-slate-50";
-    const nameCell = `<td class="py-2 pr-4 font-medium">${p.full_name || p.email}</td>`;
+    const nameCell = `<td class="py-2 pr-4 font-medium">${escapeHtml(p.full_name || p.email)}</td>`;
     const dayCells = isoDates
       .map((iso) => {
         const has = entries.some((e) => e.user_id === p.id && e.entry_date === iso);
@@ -223,7 +291,7 @@ async function loadBirthdays() {
     const msg = document.getElementById("birth-date-saved-msg");
     msg.classList.remove("hidden");
     setTimeout(() => msg.classList.add("hidden"), 2000);
-    await loadBirthdays();
+    await Promise.all([loadBirthdays(), loadDashboardSummary()]);
   };
 
   const { data: profiles } = await sb
@@ -252,11 +320,206 @@ async function loadBirthdays() {
     row.className = "flex items-center justify-between p-4";
     row.innerHTML = `
       <div>
-        <p class="font-medium">${p.full_name || p.email}</p>
+        <p class="font-medium">${escapeHtml(p.full_name || p.email)}</p>
         <p class="text-sm text-slate-500">${formatDateBR(p.birth_date).slice(0, 5)}</p>
       </div>
       ${badge}
     `;
+    list.appendChild(row);
+  });
+}
+
+// ----------------------------------------------------------------------------
+// Avisos
+// ----------------------------------------------------------------------------
+
+async function loadAnnouncements() {
+  const addBox = document.getElementById("admin-add-announcement-box");
+  if (currentProfile?.is_admin) {
+    addBox.classList.remove("hidden");
+    document.getElementById("btn-add-announcement").onclick = async () => {
+      const title = document.getElementById("announcement-title").value.trim();
+      const body = document.getElementById("announcement-body").value.trim();
+      if (!title || !body) return;
+      await sb.from("announcements").insert({ title, body, created_by: currentUser.id });
+      document.getElementById("announcement-title").value = "";
+      document.getElementById("announcement-body").value = "";
+      await Promise.all([loadAnnouncements(), loadDashboardSummary()]);
+    };
+  } else {
+    addBox.classList.add("hidden");
+  }
+
+  const { data: announcements } = await sb
+    .from("announcements")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  const list = document.getElementById("announcements-list");
+  list.innerHTML = "";
+
+  if (!announcements || announcements.length === 0) {
+    list.innerHTML = `<p class="card text-sm text-slate-400">Nenhum aviso publicado ainda.</p>`;
+    return;
+  }
+
+  announcements.forEach((a) => {
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML = `
+      <div class="flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <p class="font-heading font-semibold text-brand-navy">${escapeHtml(a.title)}</p>
+          <p class="text-sm text-brand-slate mt-1 whitespace-pre-line">${escapeHtml(a.body)}</p>
+          <p class="text-xs text-brand-mist mt-2">${formatDateBR(a.created_at.slice(0, 10))}</p>
+        </div>
+        ${currentProfile?.is_admin ? `<button class="text-sm text-red-500 hover:underline shrink-0" data-remove>Remover</button>` : ""}
+      </div>
+    `;
+    const removeBtn = el.querySelector("[data-remove]");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", async () => {
+        await sb.from("announcements").delete().eq("id", a.id);
+        await Promise.all([loadAnnouncements(), loadDashboardSummary()]);
+      });
+    }
+    list.appendChild(el);
+  });
+}
+
+// ----------------------------------------------------------------------------
+// Férias
+// ----------------------------------------------------------------------------
+
+async function loadVacations() {
+  document.getElementById("btn-add-vacation").onclick = async () => {
+    const start = document.getElementById("vacation-start").value;
+    const end = document.getElementById("vacation-end").value;
+    const errorEl = document.getElementById("vacation-error");
+    errorEl.classList.add("hidden");
+
+    if (!start || !end) {
+      errorEl.textContent = "Preencha as duas datas.";
+      errorEl.classList.remove("hidden");
+      return;
+    }
+    if (end < start) {
+      errorEl.textContent = "A data de fim não pode ser antes da data de início.";
+      errorEl.classList.remove("hidden");
+      return;
+    }
+
+    const { error } = await sb
+      .from("vacations")
+      .insert({ user_id: currentUser.id, start_date: start, end_date: end });
+
+    if (error) {
+      errorEl.textContent = "Erro ao salvar: " + error.message;
+      errorEl.classList.remove("hidden");
+      return;
+    }
+
+    document.getElementById("vacation-start").value = "";
+    document.getElementById("vacation-end").value = "";
+    await loadVacations();
+  };
+
+  const { data: vacations } = await sb
+    .from("vacations")
+    .select("id, user_id, start_date, end_date, profiles(full_name, email)")
+    .order("start_date");
+
+  const list = document.getElementById("vacations-list");
+  list.innerHTML = "";
+
+  if (!vacations || vacations.length === 0) {
+    list.innerHTML = `<p class="p-5 text-sm text-slate-400">Nenhuma férias cadastrada ainda.</p>`;
+    return;
+  }
+
+  vacations.forEach((v) => {
+    const name = v.profiles?.full_name || v.profiles?.email || "—";
+    const row = document.createElement("div");
+    row.className = "flex items-center justify-between p-4 gap-4";
+    row.innerHTML = `
+      <div>
+        <p class="font-medium">${escapeHtml(name)}</p>
+        <p class="text-sm text-slate-500">${formatDateBR(v.start_date)} a ${formatDateBR(v.end_date)}</p>
+      </div>
+      ${v.user_id === currentUser.id ? `<button class="text-sm text-red-500 hover:underline shrink-0" data-remove>Remover</button>` : ""}
+    `;
+    const removeBtn = row.querySelector("[data-remove]");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", async () => {
+        await sb.from("vacations").delete().eq("id", v.id);
+        await loadVacations();
+      });
+    }
+    list.appendChild(row);
+  });
+}
+
+// ----------------------------------------------------------------------------
+// Escala dos estagiários (por projeto/setor — somente administradores editam)
+// ----------------------------------------------------------------------------
+
+async function loadInternSchedule() {
+  const addBox = document.getElementById("admin-add-intern-box");
+  if (currentProfile?.is_admin) {
+    addBox.classList.remove("hidden");
+    document.getElementById("btn-add-intern").onclick = async () => {
+      const name = document.getElementById("intern-name").value.trim();
+      const project = document.getElementById("intern-project").value.trim();
+      const notes = document.getElementById("intern-notes").value.trim();
+      if (!name || !project) return;
+
+      await sb.from("intern_assignments").insert({
+        intern_name: name,
+        project,
+        notes: notes || null,
+        created_by: currentUser.id,
+      });
+
+      document.getElementById("intern-name").value = "";
+      document.getElementById("intern-project").value = "";
+      document.getElementById("intern-notes").value = "";
+      await loadInternSchedule();
+    };
+  } else {
+    addBox.classList.add("hidden");
+  }
+
+  const { data: interns } = await sb
+    .from("intern_assignments")
+    .select("*")
+    .order("project")
+    .order("intern_name");
+
+  const list = document.getElementById("interns-list");
+  list.innerHTML = "";
+
+  if (!interns || interns.length === 0) {
+    list.innerHTML = `<p class="p-5 text-sm text-slate-400">Nenhuma alocação cadastrada ainda.</p>`;
+    return;
+  }
+
+  interns.forEach((i) => {
+    const row = document.createElement("div");
+    row.className = "flex items-center justify-between p-4 gap-4";
+    row.innerHTML = `
+      <div class="min-w-0">
+        <p class="font-medium">${escapeHtml(i.intern_name)} <span class="text-brand-slate font-normal">— ${escapeHtml(i.project)}</span></p>
+        ${i.notes ? `<p class="text-sm text-slate-500">${escapeHtml(i.notes)}</p>` : ""}
+      </div>
+      ${currentProfile?.is_admin ? `<button class="text-sm text-red-500 hover:underline shrink-0" data-remove>Remover</button>` : ""}
+    `;
+    const removeBtn = row.querySelector("[data-remove]");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", async () => {
+        await sb.from("intern_assignments").delete().eq("id", i.id);
+        await loadInternSchedule();
+      });
+    }
     list.appendChild(row);
   });
 }
@@ -345,8 +608,8 @@ async function loadManuals() {
     row.className = "flex items-center justify-between p-4 gap-4";
     row.innerHTML = `
       <div class="min-w-0">
-        <button type="button" data-open class="font-medium text-brand-navy hover:underline text-left">${m.title}</button>
-        ${m.category ? `<p class="text-sm text-slate-500">${m.category}</p>` : ""}
+        <button type="button" data-open class="font-medium text-brand-navy hover:underline text-left">${escapeHtml(m.title)}</button>
+        ${m.category ? `<p class="text-sm text-slate-500">${escapeHtml(m.category)}</p>` : ""}
       </div>
       ${currentProfile?.is_admin ? `<button class="text-sm text-red-500 hover:underline shrink-0" data-remove>Remover</button>` : ""}
     `;

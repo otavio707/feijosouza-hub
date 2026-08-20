@@ -44,24 +44,101 @@ h1, h2, h3, .font-heading {
   background-color: #51606F;
 }
 
-.tab-btn {
-  padding: 0.75rem 1rem;
+/* Botão "Voltar" no topo de cada seção */
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   font-size: 0.875rem;
   font-weight: 500;
+  color: #51606F;
+  transition: color 0.15s;
+}
+
+.back-link:hover {
+  color: #222E40;
+}
+
+/* Cartões de resumo do dia, na página inicial */
+.stat-card {
+  background: #ffffff;
+  border-radius: 1rem;
+  padding: 1.25rem;
+  border: 1px solid #E7EBF0;
+  box-shadow: 0 1px 2px rgba(34, 46, 64, 0.05);
+}
+
+.stat-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: #9498A5;
-  border-bottom: 2px solid transparent;
-  white-space: nowrap;
-  background: transparent;
-  transition: color 0.15s, border-color 0.15s;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
 }
 
-.tab-btn:hover {
-  color: #ffffff;
+.stat-value {
+  font-family: "Quicksand", sans-serif;
+  font-weight: 700;
+  font-size: 1.15rem;
+  color: #222E40;
+  line-height: 1.3;
 }
 
-.tab-btn.active {
-  color: #ffffff;
-  border-bottom-color: #9498A5;
+.stat-sub {
+  font-size: 0.8125rem;
+  color: #51606F;
+  margin-top: 0.2rem;
+}
+
+/* Cartões clicáveis da página inicial (navegação) */
+.tile {
+  background: #ffffff;
+  border-radius: 1rem;
+  border: 1px solid #E7EBF0;
+  padding: 1.5rem;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.6rem;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+}
+
+.tile:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(34, 46, 64, 0.12);
+  border-color: #c9d2db;
+}
+
+.tile-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: rgba(148, 152, 165, 0.16);
+  color: #222E40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tile-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.tile-title {
+  font-family: "Quicksand", sans-serif;
+  font-weight: 600;
+  font-size: 1rem;
+  color: #222E40;
+}
+
+.tile-desc {
+  font-size: 0.8125rem;
+  color: #51606F;
+  line-height: 1.4;
 }
 
 .day-toggle {
