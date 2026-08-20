@@ -122,12 +122,19 @@ create policy "manuals_admin_write"
 -- ----------------------------------------------------------------------------
 -- 5. Gatilho: cria automaticamente um perfil quando alguém faz login por vez
 -- ----------------------------------------------------------------------------
+-- OBS (atualizado depois, ver seção 15): esta função também trava o domínio
+-- do e-mail (só @feijosouza.com.br), como defesa em profundidade além da
+-- config. do Azure AD. O corpo abaixo já reflete essa versão atualizada.
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
 security definer set search_path = public
 as $$
 begin
+  if new.email is null or new.email not ilike '%@feijosouza.com.br' then
+    raise exception 'Domínio de e-mail não autorizado para o Hub Feijó Souza: %', new.email;
+  end if;
+
   insert into public.profiles (id, email, full_name)
   values (
     new.id,
@@ -382,3 +389,27 @@ create policy "intern_assignments_admin_write"
   with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
 
 -- manuals_admin_write já é "for all" (cobre update também) — nada a fazer.
+
+-- ----------------------------------------------------------------------------
+-- 15. Trava de domínio no login, direto no banco (defesa em profundidade).
+-- ----------------------------------------------------------------------------
+-- O login é via Microsoft (Azure AD / Entra ID), e o App Registration está
+-- configurado como "Somente minha organização" (single-tenant) — a própria
+-- Microsoft já rejeita o login de qualquer conta fora do tenant da Feijó
+-- Souza antes mesmo de chegar no Supabase. Essa é a trava principal.
+--
+-- Só que, até aqui, essa era a ÚNICA trava: o gatilho que cria o perfil no
+-- primeiro login (handle_new_user, seção 5) nunca checava o domínio do
+-- e-mail. Se um dia a config. do Azure mudar (de propósito ou sem querer),
+-- ou um "guest" de outro domínio for convidado pro tenant, o app aceitaria
+-- o login sem nenhum aviso.
+--
+-- A função handle_new_user (seção 5, já atualizada acima) agora também
+-- rejeita qualquer e-mail que não termine em @feijosouza.com.br, derrubando
+-- a criação da conta inteira no Supabase Auth (não só o perfil). Essa trava
+-- vale mesmo que a configuração do Azure mude no futuro.
+--
+-- Testado em produção (dentro de uma transação com rollback, sem deixar
+-- rastro): e-mail fora do domínio foi bloqueado com
+-- "ERROR: P0001: Domínio de e-mail não autorizado..."; e-mail
+-- @feijosouza.com.br passou normalmente.

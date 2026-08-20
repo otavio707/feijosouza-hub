@@ -907,7 +907,7 @@ async function renderVacationsList() {
 }
 
 // ----------------------------------------------------------------------------
-// Escala dos estagiários (por projeto/setor — somente administradores editam)
+// Escala dos estagiários (por projeto/núcleo — somente administradores editam)
 // ----------------------------------------------------------------------------
 
 async function loadInternSchedule() {
@@ -929,7 +929,7 @@ async function loadInternSchedule() {
       errorEl.classList.add("hidden");
 
       if (!name || !project || !weekValue) {
-        errorEl.textContent = "Preencha nome, projeto/setor e a semana.";
+        errorEl.textContent = "Preencha nome, projeto/núcleo e a semana.";
         errorEl.classList.remove("hidden");
         return;
       }
@@ -1031,7 +1031,7 @@ async function renderInternsList() {
           <div class="w-full">
             <div class="grid sm:grid-cols-3 gap-3">
               <input type="text" data-edit-name value="${escapeHtml(i.intern_name)}" placeholder="Nome do estagiário" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
-              <input type="text" data-edit-project value="${escapeHtml(i.project)}" placeholder="Projeto/Setor" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <input type="text" data-edit-project value="${escapeHtml(i.project)}" placeholder="Projeto/Núcleo" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
               <input type="text" data-edit-notes value="${escapeHtml(i.notes || "")}" placeholder="Observações (opcional)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
             </div>
             <div class="mt-3">
@@ -1053,7 +1053,7 @@ async function renderInternsList() {
           const newWeek = viewDiv.querySelector("[data-edit-week]").value;
           const errEl = viewDiv.querySelector("[data-edit-error]");
           if (!newName || !newProject || !newWeek) {
-            errEl.textContent = "Preencha nome, projeto/setor e a semana.";
+            errEl.textContent = "Preencha nome, projeto/núcleo e a semana.";
             errEl.classList.remove("hidden");
             return;
           }
