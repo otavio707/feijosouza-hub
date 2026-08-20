@@ -139,8 +139,9 @@ function getMondayOfWeek(date) {
   return d;
 }
 
-function getWeekDates() {
+function getWeekDates(weekOffset = 0) {
   const monday = getMondayOfWeek(new Date());
+  monday.setDate(monday.getDate() + weekOffset * 7);
   const dates = [];
   for (let i = 0; i < 5; i++) {
     const d = new Date(monday);
@@ -351,12 +352,21 @@ async function loadDashboardSummary() {
 // Home office
 // ----------------------------------------------------------------------------
 
+// 0 = semana atual, 1 = semana seguinte. Por enquanto só permitimos
+// navegar até a semana seguinte (não há necessidade de ir mais além nem
+// de voltar a semanas passadas nesta tela).
+let homeOfficeWeekOffset = 0;
+const HOME_OFFICE_MAX_WEEK_OFFSET = 1;
+
 async function loadHomeOffice() {
-  const weekDates = getWeekDates();
+  const weekDates = getWeekDates(homeOfficeWeekOffset);
   const isoDates = weekDates.map(toISODate);
 
   document.getElementById("week-range").textContent =
-    `Semana de ${formatDateBR(isoDates[0])} a ${formatDateBR(isoDates[4])}`;
+    `Semana de ${formatDateBR(isoDates[0])} a ${formatDateBR(isoDates[4])}` +
+    (homeOfficeWeekOffset === 0 ? " (semana atual)" : " (semana seguinte)");
+
+  updateHomeOfficeWeekNav();
 
   const [{ data: profiles }, { data: entries }] = await Promise.all([
     sb.from("profiles").select("id, full_name, email").order("full_name"),
@@ -366,6 +376,27 @@ async function loadHomeOffice() {
   renderMyWeekToggles(isoDates, entries || []);
   renderTeamWeekTable(weekDates, profiles || [], entries || []);
 }
+
+function updateHomeOfficeWeekNav() {
+  const prevBtn = document.getElementById("btn-week-prev");
+  const nextBtn = document.getElementById("btn-week-next");
+  if (prevBtn) prevBtn.classList.toggle("hidden", homeOfficeWeekOffset <= 0);
+  if (nextBtn) nextBtn.classList.toggle("hidden", homeOfficeWeekOffset >= HOME_OFFICE_MAX_WEEK_OFFSET);
+}
+
+document.getElementById("btn-week-prev")?.addEventListener("click", () => {
+  if (homeOfficeWeekOffset > 0) {
+    homeOfficeWeekOffset -= 1;
+    loadHomeOffice();
+  }
+});
+
+document.getElementById("btn-week-next")?.addEventListener("click", () => {
+  if (homeOfficeWeekOffset < HOME_OFFICE_MAX_WEEK_OFFSET) {
+    homeOfficeWeekOffset += 1;
+    loadHomeOffice();
+  }
+});
 
 function renderMyWeekToggles(isoDates, entries) {
   const container = document.getElementById("my-week-days");

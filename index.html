@@ -155,7 +155,11 @@
           Voltar
         </button>
         <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Escala de home office da semana</h2>
-        <p id="week-range" class="text-sm text-brand-slate mb-4"></p>
+        <div class="flex items-center gap-3 mb-4">
+          <p id="week-range" class="text-sm text-brand-slate"></p>
+          <button type="button" id="btn-week-prev" class="hidden text-xs font-medium text-brand-navy border border-slate-200 rounded-lg px-3 py-1 hover:bg-slate-50">&larr; Semana atual</button>
+          <button type="button" id="btn-week-next" class="text-xs font-medium text-brand-navy border border-slate-200 rounded-lg px-3 py-1 hover:bg-slate-50">Semana seguinte &rarr;</button>
+        </div>
 
         <div class="card mb-6">
           <p id="homeoffice-instructions" class="text-sm font-medium mb-1">Marque os períodos (manhã/tarde) em que você fará home office esta semana:</p>
@@ -183,7 +187,7 @@
         </button>
         <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Aniversários da equipe</h2>
         <div class="card mb-6">
-          <p class="text-sm font-medium mb-3">Sua data de nascimento (aparece para a equipe)</p>
+          <p class="text-sm font-medium mb-3">Sua data de nascimento</p>
           <div class="flex gap-3 items-center">
             <input id="my-birth-date" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
             <button type="button" id="btn-save-birth-date" class="btn-primary">Salvar</button>
