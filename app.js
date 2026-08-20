@@ -47,8 +47,20 @@ function showLoginError(msg) {
   el.classList.remove("hidden");
 }
 
+// Depois do login via Microsoft, o Supabase processa o token de acesso que
+// vem no fragmento da URL (#access_token=...&...). Esse token não deveria
+// ficar visível na barra de endereço depois de processado — limpamos o hash
+// manualmente por segurança, já que em alguns fluxos de reload/redirect ele
+// não é removido sozinho.
+function cleanAuthHashFromUrl() {
+  if (window.location.hash && /access_token|refresh_token|provider_token/.test(window.location.hash)) {
+    window.history.replaceState(null, document.title, window.location.pathname + window.location.search);
+  }
+}
+
 async function boot() {
   const { data } = await sb.auth.getSession();
+  cleanAuthHashFromUrl();
   if (data.session) {
     await enterApp(data.session.user);
   } else {
@@ -181,6 +193,18 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// Botão "Carregar mais" compartilhado pelas listas com paginação.
+function updateLoadMoreButton(id, show, onClick) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  if (show) {
+    btn.classList.remove("hidden");
+    btn.onclick = onClick;
+  } else {
+    btn.classList.add("hidden");
+  }
 }
 
 // ----------------------------------------------------------------------------
@@ -369,14 +393,22 @@ function renderMyWeekToggles(isoDates, entries) {
       btn.textContent = `${WEEKDAY_LABELS[i]} ${formatDateBR(iso).slice(0, 5)}`;
       btn.addEventListener("click", async () => {
         if (active) {
-          await sb
+          const { error } = await sb
             .from("homeoffice_entries")
             .delete()
             .eq("user_id", currentUser.id)
             .eq("entry_date", iso)
             .eq("period", "dia");
+          if (error) {
+            alert("Erro ao desmarcar o dia: " + error.message);
+            return;
+          }
         } else {
-          await sb.from("homeoffice_entries").insert({ user_id: currentUser.id, entry_date: iso, period: "dia" });
+          const { error } = await sb.from("homeoffice_entries").insert({ user_id: currentUser.id, entry_date: iso, period: "dia" });
+          if (error) {
+            alert("Erro ao marcar o dia: " + error.message);
+            return;
+          }
         }
         await Promise.all([loadHomeOffice(), loadDashboardSummary()]);
       });
@@ -414,12 +446,16 @@ function renderMyWeekToggles(isoDates, entries) {
       btn.textContent = PERIOD_LABELS[period];
       btn.addEventListener("click", async () => {
         if (active) {
-          await sb
+          const { error } = await sb
             .from("homeoffice_entries")
             .delete()
             .eq("user_id", currentUser.id)
             .eq("entry_date", iso)
             .eq("period", period);
+          if (error) {
+            alert("Erro ao desmarcar o período: " + error.message);
+            return;
+          }
         } else {
           if (myEntrySet.size >= WEEKLY_PERIOD_QUOTA) {
             alert(
@@ -427,7 +463,11 @@ function renderMyWeekToggles(isoDates, entries) {
             );
             return;
           }
-          await sb.from("homeoffice_entries").insert({ user_id: currentUser.id, entry_date: iso, period });
+          const { error } = await sb.from("homeoffice_entries").insert({ user_id: currentUser.id, entry_date: iso, period });
+          if (error) {
+            alert("Erro ao marcar o período: " + error.message);
+            return;
+          }
         }
         await Promise.all([loadHomeOffice(), loadDashboardSummary()]);
       });
@@ -482,7 +522,11 @@ async function loadBirthdays() {
   document.getElementById("btn-save-birth-date").onclick = async () => {
     const value = document.getElementById("my-birth-date").value;
     if (!value) return;
-    await sb.from("profiles").update({ birth_date: value }).eq("id", currentUser.id);
+    const { error } = await sb.from("profiles").update({ birth_date: value }).eq("id", currentUser.id);
+    if (error) {
+      alert("Erro ao salvar sua data de nascimento: " + error.message);
+      return;
+    }
     currentProfile.birth_date = value;
     const msg = document.getElementById("birth-date-saved-msg");
     msg.classList.remove("hidden");
@@ -490,16 +534,22 @@ async function loadBirthdays() {
     await Promise.all([loadBirthdays(), loadDashboardSummary()]);
   };
 
-  const { data: profiles } = await sb
+  const { data: profiles, error } = await sb
     .from("profiles")
     .select("id, full_name, email, birth_date")
     .not("birth_date", "is", null);
+
+  const list = document.getElementById("birthdays-list");
+
+  if (error) {
+    list.innerHTML = `<p class="p-5 text-sm text-red-500">Erro ao carregar aniversários: ${escapeHtml(error.message)}</p>`;
+    return;
+  }
 
   const withDays = (profiles || [])
     .map((p) => ({ ...p, daysUntil: daysUntilNextOccurrence(p.birth_date) }))
     .sort((a, b) => a.daysUntil - b.daysUntil);
 
-  const list = document.getElementById("birthdays-list");
   list.innerHTML = "";
 
   if (withDays.length === 0) {
@@ -529,6 +579,9 @@ async function loadBirthdays() {
 // Avisos
 // ----------------------------------------------------------------------------
 
+let announcementsSearch = "";
+let announcementsLimit = 10;
+
 async function loadAnnouncements() {
   const addBox = document.getElementById("admin-add-announcement-box");
   if (currentProfile?.is_admin) {
@@ -536,26 +589,66 @@ async function loadAnnouncements() {
     document.getElementById("btn-add-announcement").onclick = async () => {
       const title = document.getElementById("announcement-title").value.trim();
       const body = document.getElementById("announcement-body").value.trim();
+      const errorEl = document.getElementById("announcement-error");
+      if (errorEl) errorEl.classList.add("hidden");
       if (!title || !body) return;
-      await sb.from("announcements").insert({ title, body, created_by: currentUser.id });
+
+      const { error } = await sb.from("announcements").insert({ title, body, created_by: currentUser.id });
+      if (error) {
+        if (errorEl) {
+          errorEl.textContent = "Erro ao publicar: " + error.message;
+          errorEl.classList.remove("hidden");
+        } else {
+          alert("Erro ao publicar: " + error.message);
+        }
+        return;
+      }
+
       document.getElementById("announcement-title").value = "";
       document.getElementById("announcement-body").value = "";
-      await Promise.all([loadAnnouncements(), loadDashboardSummary()]);
+      announcementsLimit = 10;
+      await Promise.all([renderAnnouncementsList(), loadDashboardSummary()]);
     };
   } else {
     addBox.classList.add("hidden");
   }
 
-  const { data: announcements } = await sb
-    .from("announcements")
-    .select("*")
-    .order("created_at", { ascending: false });
+  const searchInput = document.getElementById("announcements-search");
+  if (searchInput) {
+    searchInput.value = announcementsSearch;
+    searchInput.oninput = () => {
+      announcementsSearch = searchInput.value;
+      announcementsLimit = 10;
+      renderAnnouncementsList();
+    };
+  }
 
+  await renderAnnouncementsList();
+}
+
+async function renderAnnouncementsList() {
   const list = document.getElementById("announcements-list");
+
+  let query = sb.from("announcements").select("*", { count: "exact" }).order("created_at", { ascending: false });
+  const term = announcementsSearch.trim();
+  if (term) {
+    const safeTerm = term.replace(/[%,]/g, "");
+    query = query.or(`title.ilike.%${safeTerm}%,body.ilike.%${safeTerm}%`);
+  }
+
+  const { data: announcements, count, error } = await query.range(0, announcementsLimit - 1);
+
+  if (error) {
+    list.innerHTML = `<p class="card text-sm text-red-500">Erro ao carregar avisos: ${escapeHtml(error.message)}</p>`;
+    updateLoadMoreButton("announcements-load-more", false);
+    return;
+  }
+
   list.innerHTML = "";
 
   if (!announcements || announcements.length === 0) {
-    list.innerHTML = `<p class="card text-sm text-slate-400">Nenhum aviso publicado ainda.</p>`;
+    list.innerHTML = `<p class="card text-sm text-slate-400">${term ? "Nenhum aviso encontrado para essa busca." : "Nenhum aviso publicado ainda."}</p>`;
+    updateLoadMoreButton("announcements-load-more", false);
     return;
   }
 
@@ -563,23 +656,74 @@ async function loadAnnouncements() {
     const el = document.createElement("div");
     el.className = "card";
     el.innerHTML = `
-      <div class="flex items-start justify-between gap-4">
+      <div class="flex items-start justify-between gap-4" data-view>
         <div class="min-w-0">
           <p class="font-heading font-semibold text-brand-navy">${escapeHtml(a.title)}</p>
           <p class="text-sm text-brand-slate mt-1 whitespace-pre-line">${escapeHtml(a.body)}</p>
           <p class="text-xs text-brand-mist mt-2">${formatDateBR(a.created_at.slice(0, 10))}</p>
         </div>
-        ${currentProfile?.is_admin ? `<button class="text-sm text-red-500 hover:underline shrink-0" data-remove>Remover</button>` : ""}
+        ${currentProfile?.is_admin ? `
+          <div class="flex gap-3 shrink-0">
+            <button type="button" class="text-sm text-brand-slate hover:underline" data-edit>Editar</button>
+            <button type="button" class="text-sm text-red-500 hover:underline" data-remove>Remover</button>
+          </div>` : ""}
       </div>
     `;
+
     const removeBtn = el.querySelector("[data-remove]");
     if (removeBtn) {
       removeBtn.addEventListener("click", async () => {
-        await sb.from("announcements").delete().eq("id", a.id);
-        await Promise.all([loadAnnouncements(), loadDashboardSummary()]);
+        const { error } = await sb.from("announcements").delete().eq("id", a.id);
+        if (error) {
+          alert("Erro ao remover aviso: " + error.message);
+          return;
+        }
+        await Promise.all([renderAnnouncementsList(), loadDashboardSummary()]);
       });
     }
+
+    const editBtn = el.querySelector("[data-edit]");
+    if (editBtn) {
+      editBtn.addEventListener("click", () => {
+        const viewDiv = el.querySelector("[data-view]");
+        viewDiv.innerHTML = `
+          <div class="w-full">
+            <input type="text" data-edit-title class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mb-2" value="${escapeHtml(a.title)}" />
+            <textarea data-edit-body rows="3" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full">${escapeHtml(a.body)}</textarea>
+            <p data-edit-error class="text-sm text-red-500 mt-2 hidden"></p>
+            <div class="flex gap-3 mt-2">
+              <button type="button" data-save class="btn-primary">Salvar</button>
+              <button type="button" data-cancel class="text-sm text-brand-slate hover:underline">Cancelar</button>
+            </div>
+          </div>
+        `;
+        viewDiv.querySelector("[data-cancel]").addEventListener("click", () => renderAnnouncementsList());
+        viewDiv.querySelector("[data-save]").addEventListener("click", async () => {
+          const newTitle = viewDiv.querySelector("[data-edit-title]").value.trim();
+          const newBody = viewDiv.querySelector("[data-edit-body]").value.trim();
+          const errEl = viewDiv.querySelector("[data-edit-error]");
+          if (!newTitle || !newBody) {
+            errEl.textContent = "Preencha título e mensagem.";
+            errEl.classList.remove("hidden");
+            return;
+          }
+          const { error } = await sb.from("announcements").update({ title: newTitle, body: newBody }).eq("id", a.id);
+          if (error) {
+            errEl.textContent = "Erro ao salvar: " + error.message;
+            errEl.classList.remove("hidden");
+            return;
+          }
+          await Promise.all([renderAnnouncementsList(), loadDashboardSummary()]);
+        });
+      });
+    }
+
     list.appendChild(el);
+  });
+
+  updateLoadMoreButton("announcements-load-more", (count || 0) > announcements.length, () => {
+    announcementsLimit += 10;
+    renderAnnouncementsList();
   });
 }
 
@@ -636,15 +780,25 @@ async function loadVacations() {
     startInput.value = "";
     endInput.value = "";
     if (previewEl) previewEl.textContent = "";
-    await loadVacations();
+    await renderVacationsList();
   };
 
-  const { data: vacations } = await sb
+  await renderVacationsList();
+}
+
+async function renderVacationsList() {
+  const list = document.getElementById("vacations-list");
+
+  const { data: vacations, error } = await sb
     .from("vacations")
     .select("id, user_id, start_date, end_date, profiles(full_name, email)")
     .order("start_date");
 
-  const list = document.getElementById("vacations-list");
+  if (error) {
+    list.innerHTML = `<p class="p-5 text-sm text-red-500">Erro ao carregar férias: ${escapeHtml(error.message)}</p>`;
+    return;
+  }
+
   list.innerHTML = "";
 
   if (!vacations || vacations.length === 0) {
@@ -656,21 +810,98 @@ async function loadVacations() {
     const name = v.profiles?.full_name || v.profiles?.email || "—";
     const days = countBusinessDays(v.start_date, v.end_date);
     const row = document.createElement("div");
-    row.className = "flex items-center justify-between p-4 gap-4";
+    row.className = "p-4";
     row.innerHTML = `
-      <div>
-        <p class="font-medium">${escapeHtml(name)}</p>
-        <p class="text-sm text-slate-500">${formatDateBR(v.start_date)} a ${formatDateBR(v.end_date)} · ${formatBusinessDays(days)}</p>
+      <div class="flex items-center justify-between gap-4" data-view>
+        <div>
+          <p class="font-medium">${escapeHtml(name)}</p>
+          <p class="text-sm text-slate-500">${formatDateBR(v.start_date)} a ${formatDateBR(v.end_date)} · ${formatBusinessDays(days)}</p>
+        </div>
+        ${v.user_id === currentUser.id ? `
+          <div class="flex gap-3 shrink-0">
+            <button type="button" class="text-sm text-brand-slate hover:underline" data-edit>Editar</button>
+            <button type="button" class="text-sm text-red-500 hover:underline" data-remove>Remover</button>
+          </div>` : ""}
       </div>
-      ${v.user_id === currentUser.id ? `<button class="text-sm text-red-500 hover:underline shrink-0" data-remove>Remover</button>` : ""}
     `;
+
     const removeBtn = row.querySelector("[data-remove]");
     if (removeBtn) {
       removeBtn.addEventListener("click", async () => {
-        await sb.from("vacations").delete().eq("id", v.id);
-        await loadVacations();
+        const { error } = await sb.from("vacations").delete().eq("id", v.id);
+        if (error) {
+          alert("Erro ao remover férias: " + error.message);
+          return;
+        }
+        await renderVacationsList();
       });
     }
+
+    const editBtn = row.querySelector("[data-edit]");
+    if (editBtn) {
+      editBtn.addEventListener("click", () => {
+        const viewDiv = row.querySelector("[data-view]");
+        viewDiv.innerHTML = `
+          <div class="w-full">
+            <div class="flex flex-wrap gap-3 items-end">
+              <div>
+                <label class="block text-xs text-brand-slate mb-1">Início</label>
+                <input type="date" data-edit-start value="${v.start_date}" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label class="block text-xs text-brand-slate mb-1">Fim</label>
+                <input type="date" data-edit-end value="${v.end_date}" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <button type="button" data-save class="btn-primary">Salvar</button>
+              <button type="button" data-cancel class="text-sm text-brand-slate hover:underline">Cancelar</button>
+            </div>
+            <p data-edit-preview class="text-sm text-brand-slate mt-2"></p>
+            <p data-edit-error class="text-sm text-red-500 mt-1 hidden"></p>
+          </div>
+        `;
+        const startEl = viewDiv.querySelector("[data-edit-start]");
+        const endEl = viewDiv.querySelector("[data-edit-end]");
+        const previewEl = viewDiv.querySelector("[data-edit-preview]");
+        const updateEditPreview = () => {
+          if (startEl.value && endEl.value && endEl.value >= startEl.value) {
+            previewEl.textContent = `${formatBusinessDays(countBusinessDays(startEl.value, endEl.value))} nesse período.`;
+          } else {
+            previewEl.textContent = "";
+          }
+        };
+        startEl.oninput = updateEditPreview;
+        endEl.oninput = updateEditPreview;
+        updateEditPreview();
+
+        viewDiv.querySelector("[data-cancel]").addEventListener("click", () => renderVacationsList());
+        viewDiv.querySelector("[data-save]").addEventListener("click", async () => {
+          const errEl = viewDiv.querySelector("[data-edit-error]");
+          const newStart = startEl.value;
+          const newEnd = endEl.value;
+          if (!newStart || !newEnd) {
+            errEl.textContent = "Preencha as duas datas.";
+            errEl.classList.remove("hidden");
+            return;
+          }
+          if (newEnd < newStart) {
+            errEl.textContent = "A data de fim não pode ser antes da data de início.";
+            errEl.classList.remove("hidden");
+            return;
+          }
+          const { error } = await sb
+            .from("vacations")
+            .update({ start_date: newStart, end_date: newEnd })
+            .eq("id", v.id);
+          if (error) {
+            errEl.textContent = "Erro ao salvar: " + error.message;
+            errEl.classList.remove("hidden");
+            return;
+          }
+          await renderVacationsList();
+        });
+      });
+    }
+
     list.appendChild(row);
   });
 }
@@ -703,7 +934,7 @@ async function loadInternSchedule() {
         return;
       }
 
-      await sb.from("intern_assignments").insert({
+      const { error } = await sb.from("intern_assignments").insert({
         intern_name: name,
         project,
         notes: notes || null,
@@ -711,24 +942,40 @@ async function loadInternSchedule() {
         created_by: currentUser.id,
       });
 
+      if (error) {
+        errorEl.textContent = "Erro ao adicionar: " + error.message;
+        errorEl.classList.remove("hidden");
+        return;
+      }
+
       document.getElementById("intern-name").value = "";
       document.getElementById("intern-project").value = "";
       document.getElementById("intern-notes").value = "";
       document.getElementById("intern-week").value = toISODate(getMondayOfWeek(new Date()));
-      await loadInternSchedule();
+      await renderInternsList();
     };
   } else {
     addBox.classList.add("hidden");
   }
 
-  const { data: interns } = await sb
+  await renderInternsList();
+}
+
+async function renderInternsList() {
+  const list = document.getElementById("interns-list");
+
+  const { data: interns, error } = await sb
     .from("intern_assignments")
     .select("*")
     .order("week_start", { ascending: false })
     .order("project")
     .order("intern_name");
 
-  const list = document.getElementById("interns-list");
+  if (error) {
+    list.innerHTML = `<p class="p-5 text-sm text-red-500">Erro ao carregar a escala: ${escapeHtml(error.message)}</p>`;
+    return;
+  }
+
   list.innerHTML = "";
 
   if (!interns || interns.length === 0) {
@@ -749,21 +996,86 @@ async function loadInternSchedule() {
     }
 
     const row = document.createElement("div");
-    row.className = "flex items-center justify-between p-4 gap-4";
+    row.className = "p-4";
     row.innerHTML = `
-      <div class="min-w-0">
-        <p class="font-medium">${escapeHtml(i.intern_name)} <span class="text-brand-slate font-normal">— ${escapeHtml(i.project)}</span></p>
-        ${i.notes ? `<p class="text-sm text-slate-500">${escapeHtml(i.notes)}</p>` : ""}
+      <div class="flex items-center justify-between gap-4" data-view>
+        <div class="min-w-0">
+          <p class="font-medium">${escapeHtml(i.intern_name)} <span class="text-brand-slate font-normal">— ${escapeHtml(i.project)}</span></p>
+          ${i.notes ? `<p class="text-sm text-slate-500">${escapeHtml(i.notes)}</p>` : ""}
+        </div>
+        ${currentProfile?.is_admin ? `
+          <div class="flex gap-3 shrink-0">
+            <button type="button" class="text-sm text-brand-slate hover:underline" data-edit>Editar</button>
+            <button type="button" class="text-sm text-red-500 hover:underline" data-remove>Remover</button>
+          </div>` : ""}
       </div>
-      ${currentProfile?.is_admin ? `<button class="text-sm text-red-500 hover:underline shrink-0" data-remove>Remover</button>` : ""}
     `;
+
     const removeBtn = row.querySelector("[data-remove]");
     if (removeBtn) {
       removeBtn.addEventListener("click", async () => {
-        await sb.from("intern_assignments").delete().eq("id", i.id);
-        await loadInternSchedule();
+        const { error } = await sb.from("intern_assignments").delete().eq("id", i.id);
+        if (error) {
+          alert("Erro ao remover alocação: " + error.message);
+          return;
+        }
+        await renderInternsList();
       });
     }
+
+    const editBtn = row.querySelector("[data-edit]");
+    if (editBtn) {
+      editBtn.addEventListener("click", () => {
+        const viewDiv = row.querySelector("[data-view]");
+        viewDiv.innerHTML = `
+          <div class="w-full">
+            <div class="grid sm:grid-cols-3 gap-3">
+              <input type="text" data-edit-name value="${escapeHtml(i.intern_name)}" placeholder="Nome do estagiário" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <input type="text" data-edit-project value="${escapeHtml(i.project)}" placeholder="Projeto/Setor" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <input type="text" data-edit-notes value="${escapeHtml(i.notes || "")}" placeholder="Observações (opcional)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div class="mt-3">
+              <label class="block text-xs text-brand-slate mb-1">Semana</label>
+              <input type="date" data-edit-week value="${i.week_start}" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <p data-edit-error class="text-sm text-red-500 mt-2 hidden"></p>
+            <div class="flex gap-3 mt-3">
+              <button type="button" data-save class="btn-primary">Salvar</button>
+              <button type="button" data-cancel class="text-sm text-brand-slate hover:underline">Cancelar</button>
+            </div>
+          </div>
+        `;
+        viewDiv.querySelector("[data-cancel]").addEventListener("click", () => renderInternsList());
+        viewDiv.querySelector("[data-save]").addEventListener("click", async () => {
+          const newName = viewDiv.querySelector("[data-edit-name]").value.trim();
+          const newProject = viewDiv.querySelector("[data-edit-project]").value.trim();
+          const newNotes = viewDiv.querySelector("[data-edit-notes]").value.trim();
+          const newWeek = viewDiv.querySelector("[data-edit-week]").value;
+          const errEl = viewDiv.querySelector("[data-edit-error]");
+          if (!newName || !newProject || !newWeek) {
+            errEl.textContent = "Preencha nome, projeto/setor e a semana.";
+            errEl.classList.remove("hidden");
+            return;
+          }
+          const { error } = await sb
+            .from("intern_assignments")
+            .update({
+              intern_name: newName,
+              project: newProject,
+              notes: newNotes || null,
+              week_start: mondayOfISOWeek(newWeek),
+            })
+            .eq("id", i.id);
+          if (error) {
+            errEl.textContent = "Erro ao salvar: " + error.message;
+            errEl.classList.remove("hidden");
+            return;
+          }
+          await renderInternsList();
+        });
+      });
+    }
+
     list.appendChild(row);
   });
 }
@@ -771,6 +1083,9 @@ async function loadInternSchedule() {
 // ----------------------------------------------------------------------------
 // Manuais
 // ----------------------------------------------------------------------------
+
+let manualsSearch = "";
+let manualsLimit = 20;
 
 async function loadManuals() {
   const addBox = document.getElementById("admin-add-manual-box");
@@ -814,7 +1129,7 @@ async function loadManuals() {
         return;
       }
 
-      await sb.from("manuals").insert({
+      const { error: insertError } = await sb.from("manuals").insert({
         title,
         category,
         storage_path: storagePath,
@@ -822,40 +1137,80 @@ async function loadManuals() {
         created_by: currentUser.id,
       });
 
+      if (insertError) {
+        errorEl.textContent = "Arquivo enviado, mas houve erro ao salvar o registro: " + insertError.message;
+        errorEl.classList.remove("hidden");
+        btn.disabled = false;
+        btn.textContent = "Adicionar";
+        return;
+      }
+
       document.getElementById("manual-title").value = "";
       document.getElementById("manual-category").value = "";
       fileInput.value = "";
       btn.disabled = false;
       btn.textContent = "Adicionar";
-      await loadManuals();
+      manualsLimit = 20;
+      await renderManualsList();
     };
   } else {
     addBox.classList.add("hidden");
   }
 
-  const { data: manuals } = await sb
-    .from("manuals")
-    .select("*")
-    .order("category")
-    .order("title");
+  const searchInput = document.getElementById("manuals-search");
+  if (searchInput) {
+    searchInput.value = manualsSearch;
+    searchInput.oninput = () => {
+      manualsSearch = searchInput.value;
+      manualsLimit = 20;
+      renderManualsList();
+    };
+  }
 
+  await renderManualsList();
+}
+
+async function renderManualsList() {
   const list = document.getElementById("manuals-list");
+
+  let query = sb.from("manuals").select("*", { count: "exact" }).order("category").order("title");
+  const term = manualsSearch.trim();
+  if (term) {
+    const safeTerm = term.replace(/[%,]/g, "");
+    query = query.or(`title.ilike.%${safeTerm}%,category.ilike.%${safeTerm}%`);
+  }
+
+  const { data: manuals, count, error } = await query.range(0, manualsLimit - 1);
+
+  if (error) {
+    list.innerHTML = `<p class="p-5 text-sm text-red-500">Erro ao carregar manuais: ${escapeHtml(error.message)}</p>`;
+    updateLoadMoreButton("manuals-load-more", false);
+    return;
+  }
+
   list.innerHTML = "";
 
   if (!manuals || manuals.length === 0) {
-    list.innerHTML = `<p class="p-5 text-sm text-slate-400">Nenhum manual cadastrado ainda.</p>`;
+    list.innerHTML = `<p class="p-5 text-sm text-slate-400">${term ? "Nenhum manual encontrado para essa busca." : "Nenhum manual cadastrado ainda."}</p>`;
+    updateLoadMoreButton("manuals-load-more", false);
     return;
   }
 
   manuals.forEach((m) => {
     const row = document.createElement("div");
-    row.className = "flex items-center justify-between p-4 gap-4";
+    row.className = "p-4";
     row.innerHTML = `
-      <div class="min-w-0">
-        <button type="button" data-open class="font-medium text-brand-navy hover:underline text-left">${escapeHtml(m.title)}</button>
-        ${m.category ? `<p class="text-sm text-slate-500">${escapeHtml(m.category)}</p>` : ""}
+      <div class="flex items-center justify-between gap-4" data-view>
+        <div class="min-w-0">
+          <button type="button" data-open class="font-medium text-brand-navy hover:underline text-left">${escapeHtml(m.title)}</button>
+          ${m.category ? `<p class="text-sm text-slate-500">${escapeHtml(m.category)}</p>` : ""}
+        </div>
+        ${currentProfile?.is_admin ? `
+          <div class="flex gap-3 shrink-0">
+            <button type="button" class="text-sm text-brand-slate hover:underline" data-edit>Editar</button>
+            <button type="button" class="text-sm text-red-500 hover:underline" data-remove>Remover</button>
+          </div>` : ""}
       </div>
-      ${currentProfile?.is_admin ? `<button class="text-sm text-red-500 hover:underline shrink-0" data-remove>Remover</button>` : ""}
     `;
 
     row.querySelector("[data-open]").addEventListener("click", async () => {
@@ -878,14 +1233,69 @@ async function loadManuals() {
     if (removeBtn) {
       removeBtn.addEventListener("click", async () => {
         if (m.storage_path) {
-          await sb.storage.from("manuals").remove([m.storage_path]);
+          const { error: storageError } = await sb.storage.from("manuals").remove([m.storage_path]);
+          if (storageError) {
+            alert("Erro ao remover o arquivo: " + storageError.message);
+            return;
+          }
         }
-        await sb.from("manuals").delete().eq("id", m.id);
-        await loadManuals();
+        const { error } = await sb.from("manuals").delete().eq("id", m.id);
+        if (error) {
+          alert("Erro ao remover o manual: " + error.message);
+          return;
+        }
+        await renderManualsList();
+      });
+    }
+
+    const editBtn = row.querySelector("[data-edit]");
+    if (editBtn) {
+      editBtn.addEventListener("click", () => {
+        const viewDiv = row.querySelector("[data-view]");
+        viewDiv.innerHTML = `
+          <div class="w-full">
+            <div class="grid sm:grid-cols-2 gap-3">
+              <input type="text" data-edit-title value="${escapeHtml(m.title)}" placeholder="Título" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <input type="text" data-edit-category value="${escapeHtml(m.category || "")}" placeholder="Categoria" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <p class="text-xs text-brand-mist mt-2">Para trocar o arquivo, remova este manual e cadastre de novo.</p>
+            <p data-edit-error class="text-sm text-red-500 mt-2 hidden"></p>
+            <div class="flex gap-3 mt-3">
+              <button type="button" data-save class="btn-primary">Salvar</button>
+              <button type="button" data-cancel class="text-sm text-brand-slate hover:underline">Cancelar</button>
+            </div>
+          </div>
+        `;
+        viewDiv.querySelector("[data-cancel]").addEventListener("click", () => renderManualsList());
+        viewDiv.querySelector("[data-save]").addEventListener("click", async () => {
+          const newTitle = viewDiv.querySelector("[data-edit-title]").value.trim();
+          const newCategory = viewDiv.querySelector("[data-edit-category]").value.trim();
+          const errEl = viewDiv.querySelector("[data-edit-error]");
+          if (!newTitle) {
+            errEl.textContent = "Preencha o título.";
+            errEl.classList.remove("hidden");
+            return;
+          }
+          const { error } = await sb
+            .from("manuals")
+            .update({ title: newTitle, category: newCategory || null })
+            .eq("id", m.id);
+          if (error) {
+            errEl.textContent = "Erro ao salvar: " + error.message;
+            errEl.classList.remove("hidden");
+            return;
+          }
+          await renderManualsList();
+        });
       });
     }
 
     list.appendChild(row);
+  });
+
+  updateLoadMoreButton("manuals-load-more", (count || 0) > manuals.length, () => {
+    manualsLimit += 20;
+    renderManualsList();
   });
 }
 
@@ -894,6 +1304,7 @@ async function loadManuals() {
 // ----------------------------------------------------------------------------
 
 sb.auth.onAuthStateChange((_event, session) => {
+  cleanAuthHashFromUrl();
   if (session?.user && !currentUser) {
     enterApp(session.user);
   }

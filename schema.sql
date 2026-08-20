@@ -329,3 +329,56 @@ alter table public.homeoffice_entries
 -- Depois que a estagiária fizer login pelo menos uma vez, marque-a como
 -- estagiária rodando (troque o e-mail):
 -- update public.profiles set is_intern = true where email = 'email.da.estagiaria@feijosouza.com.br';
+
+-- ----------------------------------------------------------------------------
+-- 14. Segurança: trava is_admin/is_intern contra alteração pelo próprio app,
+--     e permite EDITAR (em vez de só apagar e recriar) avisos, férias e
+--     alocação de estagiários.
+-- ----------------------------------------------------------------------------
+
+-- A política "profiles_update_own" (seção 1) só restringe QUAL linha cada
+-- pessoa pode atualizar, não QUAIS COLUNAS. Este gatilho bloqueia a troca de
+-- is_admin/is_intern sempre que o pedido vier autenticado como usuário comum
+-- (via app/API) — só é possível alterar essas colunas rodando o SQL
+-- diretamente pelo SQL Editor do Supabase.
+create or replace function public.prevent_self_privilege_escalation()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if (new.is_admin is distinct from old.is_admin or new.is_intern is distinct from old.is_intern)
+     and auth.role() = 'authenticated' then
+    raise exception 'Alteração de is_admin/is_intern não é permitida pelo aplicativo. Peça a um administrador para alterar pelo SQL Editor do Supabase.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_prevent_self_privilege_escalation on public.profiles;
+create trigger trg_prevent_self_privilege_escalation
+  before update on public.profiles
+  for each row execute procedure public.prevent_self_privilege_escalation();
+
+drop policy if exists "announcements_admin_write" on public.announcements;
+create policy "announcements_admin_write"
+  on public.announcements for all
+  to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+drop policy if exists "vacations_update_own" on public.vacations;
+create policy "vacations_update_own"
+  on public.vacations for update
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "intern_assignments_admin_write" on public.intern_assignments;
+create policy "intern_assignments_admin_write"
+  on public.intern_assignments for all
+  to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+-- manuals_admin_write já é "for all" (cobre update também) — nada a fazer.
