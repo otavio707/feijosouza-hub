@@ -208,6 +208,26 @@ function updateLoadMoreButton(id, show, onClick) {
   }
 }
 
+// Atrasa a execução de `fn` até `delay`ms depois da última chamada — usado
+// nos campos de busca para não disparar uma consulta ao banco a cada tecla
+// digitada, só depois que a pessoa parar de digitar por um instante.
+function debounce(fn, delay = 300) {
+  let timer = null;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
+}
+
+function formatDateTimeBR(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const date = d.toLocaleDateString("pt-BR");
+  const time = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  return `${date} às ${time}`;
+}
+
 // ----------------------------------------------------------------------------
 // Dias úteis / feriados nacionais (para o cálculo de férias)
 // ----------------------------------------------------------------------------
@@ -370,11 +390,12 @@ async function loadHomeOffice() {
 
   const [{ data: profiles }, { data: entries }] = await Promise.all([
     sb.from("profiles").select("id, full_name, email").order("full_name"),
-    sb.from("homeoffice_entries").select("user_id, entry_date, period").in("entry_date", isoDates),
+    sb.from("homeoffice_entries").select("user_id, entry_date, period, created_at").in("entry_date", isoDates),
   ]);
 
   renderMyWeekToggles(isoDates, entries || []);
   renderTeamWeekTable(weekDates, profiles || [], entries || []);
+  renderHomeOfficeAdminLog(weekDates, profiles || [], entries || []);
 }
 
 function updateHomeOfficeWeekNav() {
@@ -543,6 +564,51 @@ function renderTeamWeekTable(weekDates, profiles, entries) {
   });
 }
 
+// Somente administradores: mostra QUANDO cada pessoa marcou cada dia/período
+// de home office (data/hora do clique), para a semana atualmente exibida —
+// não é visível para quem não é admin, embora a RLS já permita a qualquer
+// pessoa autenticada ler a escala (assim como as outras seções admin do hub).
+function renderHomeOfficeAdminLog(weekDates, profiles, entries) {
+  const container = document.getElementById("homeoffice-admin-log");
+  if (!container) return;
+
+  if (!currentProfile?.is_admin) {
+    container.classList.add("hidden");
+    container.innerHTML = "";
+    return;
+  }
+  container.classList.remove("hidden");
+
+  const isoDates = weekDates.map(toISODate);
+  const dayIndexByIso = Object.fromEntries(isoDates.map((iso, i) => [iso, i]));
+
+  const rows = entries
+    .slice()
+    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    .map((e) => {
+      const p = profiles.find((pp) => pp.id === e.user_id);
+      const name = p ? p.full_name || p.email : "—";
+      const dayIdx = dayIndexByIso[e.entry_date];
+      const dayLabel =
+        dayIdx !== undefined
+          ? `${WEEKDAY_LABELS[dayIdx]} ${formatDateBR(e.entry_date).slice(0, 5)}`
+          : formatDateBR(e.entry_date);
+      const periodLabel = e.period === "dia" ? "" : ` (${PERIOD_LABELS[e.period]})`;
+      return `
+        <div class="flex items-center justify-between gap-4 py-2 border-b border-slate-50 last:border-0">
+          <p class="text-sm min-w-0"><span class="font-medium">${escapeHtml(name)}</span> marcou ${dayLabel}${periodLabel}</p>
+          <p class="text-xs text-brand-mist shrink-0">${formatDateTimeBR(e.created_at)}</p>
+        </div>
+      `;
+    });
+
+  container.innerHTML = `
+    <p class="text-sm font-medium mb-1">Quando cada pessoa marcou (somente administradores)</p>
+    <p class="text-xs text-brand-mist mb-3">Data e hora em que cada marcação foi feita, para a semana exibida acima.</p>
+    ${rows.length ? rows.join("") : `<p class="text-sm text-slate-400">Ninguém marcou home office nesta semana ainda.</p>`}
+  `;
+}
+
 // ----------------------------------------------------------------------------
 // Aniversários da equipe
 // ----------------------------------------------------------------------------
@@ -647,10 +713,11 @@ async function loadAnnouncements() {
   const searchInput = document.getElementById("announcements-search");
   if (searchInput) {
     searchInput.value = announcementsSearch;
+    const debouncedSearch = debounce(() => renderAnnouncementsList(), 300);
     searchInput.oninput = () => {
       announcementsSearch = searchInput.value;
       announcementsLimit = 10;
-      renderAnnouncementsList();
+      debouncedSearch();
     };
   }
 
@@ -1191,10 +1258,11 @@ async function loadManuals() {
   const searchInput = document.getElementById("manuals-search");
   if (searchInput) {
     searchInput.value = manualsSearch;
+    const debouncedSearch = debounce(() => renderManualsList(), 300);
     searchInput.oninput = () => {
       manualsSearch = searchInput.value;
       manualsLimit = 20;
-      renderManualsList();
+      debouncedSearch();
     };
   }
 
