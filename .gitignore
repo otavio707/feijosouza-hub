@@ -1,0 +1,4 @@
+# Nunca versionar segredos e arquivos locais de infraestrutura/banco de dados
+sql/
+supabase/
+teste-manual.pdf
