@@ -313,12 +313,20 @@ async function loadDashboardSummary() {
   document.getElementById("summary-date-label").textContent =
     `Hoje, ${formatDateBR(todayISO).slice(0, 5)}`;
 
-  const [{ data: profiles }, { data: entries }, { data: birthProfiles }, { data: announcements }] =
+  const [{ data: profiles }, { data: entries }, { data: birthProfiles }, { data: announcements }, { data: vacations }] =
     await Promise.all([
       sb.from("profiles").select("id, full_name, email"),
       sb.from("homeoffice_entries").select("user_id, period").eq("entry_date", todayISO),
       sb.from("profiles").select("full_name, email, birth_date").not("birth_date", "is", null),
       sb.from("announcements").select("title, body, created_at").order("created_at", { ascending: false }).limit(1),
+      // Próxima (ou atual) férias de qualquer pessoa da equipe: qualquer período
+      // que ainda não tenha terminado, o mais próximo de começar primeiro.
+      sb
+        .from("vacations")
+        .select("user_id, start_date, end_date, profiles(full_name, email)")
+        .gte("end_date", todayISO)
+        .order("start_date", { ascending: true })
+        .limit(1),
     ]);
 
   const periodsByUser = {};
@@ -365,6 +373,18 @@ async function loadDashboardSummary() {
   } else {
     document.getElementById("summary-announcement-title").textContent = "—";
     document.getElementById("summary-announcement-sub").textContent = "Nenhum aviso publicado ainda";
+  }
+
+  const nextVacation = (vacations || [])[0];
+  if (nextVacation) {
+    const name = nextVacation.profiles?.full_name || nextVacation.profiles?.email || "—";
+    const period = `De ${formatDateBR(nextVacation.start_date)} a ${formatDateBR(nextVacation.end_date)}`;
+    document.getElementById("summary-vacation-name").textContent = name;
+    document.getElementById("summary-vacation-sub").textContent =
+      nextVacation.start_date <= todayISO ? `${period} (em curso)` : period;
+  } else {
+    document.getElementById("summary-vacation-name").textContent = "—";
+    document.getElementById("summary-vacation-sub").textContent = "Nenhuma férias agendada";
   }
 }
 
@@ -878,7 +898,7 @@ async function loadVacations() {
     startInput.value = "";
     endInput.value = "";
     if (previewEl) previewEl.textContent = "";
-    await renderVacationsList();
+    await Promise.all([renderVacationsList(), loadDashboardSummary()]);
   };
 
   await renderVacationsList();
@@ -931,7 +951,7 @@ async function renderVacationsList() {
           alert("Erro ao remover férias: " + error.message);
           return;
         }
-        await renderVacationsList();
+        await Promise.all([renderVacationsList(), loadDashboardSummary()]);
       });
     }
 
@@ -995,7 +1015,7 @@ async function renderVacationsList() {
             errEl.classList.remove("hidden");
             return;
           }
-          await renderVacationsList();
+          await Promise.all([renderVacationsList(), loadDashboardSummary()]);
         });
       });
     }
