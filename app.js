@@ -88,6 +88,7 @@ async function enterApp(user) {
     loadVacations(),
     loadInternSchedule(),
     loadManuals(),
+    loadProfileTab(),
   ]);
 }
 
@@ -1416,6 +1417,173 @@ async function renderManualsList() {
     manualsLimit += 20;
     renderManualsList();
   });
+}
+
+// ----------------------------------------------------------------------------
+// Meu perfil — dados visíveis somente para a própria pessoa (e para
+// administradores, que também podem editar os de qualquer colaborador(a)):
+// data de admissão, saldo de férias remanescentes e histórico de feedbacks.
+// A RLS já restringe a leitura a "a própria linha ou um admin"; aqui só
+// cuidamos de exibir/editar o que a consulta efetivamente retornar.
+// ----------------------------------------------------------------------------
+
+function formatVacationBalance(days) {
+  if (days === null || days === undefined) return "—";
+  const n = Number(days);
+  if (Number.isNaN(n)) return "—";
+  const rounded = Math.round(n * 10) / 10;
+  return `${rounded} dia${rounded === 1 ? "" : "s"}`;
+}
+
+function renderFeedbackList(container, entries, { withRemove = false } = {}) {
+  if (!entries || entries.length === 0) {
+    container.innerHTML = `<p class="p-4 text-sm text-slate-400">Nenhum feedback registrado ainda.</p>`;
+    return;
+  }
+  container.innerHTML = "";
+  entries.forEach((f) => {
+    const row = document.createElement("div");
+    row.className = "p-4";
+    row.innerHTML = `
+      <div class="flex items-start justify-between gap-4">
+        <p class="text-sm whitespace-pre-line min-w-0">${escapeHtml(f.body)}</p>
+        ${withRemove ? `<button type="button" class="text-sm text-red-500 hover:underline shrink-0" data-remove-feedback>Remover</button>` : ""}
+      </div>
+      <p class="text-xs text-brand-mist mt-1">${formatDateTimeBR(f.created_at)}</p>
+    `;
+    if (withRemove) {
+      row.querySelector("[data-remove-feedback]").addEventListener("click", async () => {
+        const { error } = await sb.from("feedback_entries").delete().eq("id", f.id);
+        if (error) {
+          alert("Erro ao remover feedback: " + error.message);
+          return;
+        }
+        await loadProfileEditorFor(currentEditorUserId);
+      });
+    }
+    container.appendChild(row);
+  });
+}
+
+async function loadProfileTab() {
+  // --- "Meus dados" (somente leitura, sempre a própria pessoa) ---
+  const [{ data: myDetails }, { data: myFeedback }] = await Promise.all([
+    sb.from("employee_profile_details").select("*").eq("user_id", currentUser.id).maybeSingle(),
+    sb.from("feedback_entries").select("*").eq("user_id", currentUser.id).order("created_at", { ascending: false }),
+  ]);
+
+  document.getElementById("profile-hire-date").textContent = myDetails?.hire_date
+    ? formatDateBR(myDetails.hire_date)
+    : "—";
+  document.getElementById("profile-vacation-balance").textContent = formatVacationBalance(
+    myDetails?.vacation_balance_days
+  );
+
+  renderFeedbackList(document.getElementById("profile-feedback-list"), myFeedback || []);
+
+  // --- edição por administradores, para qualquer colaborador(a) ---
+  const adminBox = document.getElementById("admin-profile-editor-box");
+  if (!currentProfile?.is_admin) {
+    adminBox.classList.add("hidden");
+    return;
+  }
+  adminBox.classList.remove("hidden");
+
+  const { data: allProfiles } = await sb.from("profiles").select("id, full_name, email").order("full_name");
+  const select = document.getElementById("profile-editor-select");
+  const previousSelection = select.value;
+  select.innerHTML =
+    `<option value="">Selecione...</option>` +
+    (allProfiles || [])
+      .map((p) => `<option value="${p.id}">${escapeHtml(p.full_name || p.email)}</option>`)
+      .join("");
+  select.value = previousSelection;
+  select.onchange = () => loadProfileEditorFor(select.value || null);
+
+  if (!select.value) {
+    document.getElementById("profile-editor-fields").classList.add("hidden");
+  }
+}
+
+let currentEditorUserId = null;
+
+async function loadProfileEditorFor(userId) {
+  currentEditorUserId = userId;
+  const fieldsBox = document.getElementById("profile-editor-fields");
+  if (!userId) {
+    fieldsBox.classList.add("hidden");
+    return;
+  }
+  fieldsBox.classList.remove("hidden");
+
+  const savedMsg = document.getElementById("profile-editor-saved-msg");
+  savedMsg.classList.add("hidden");
+  const errEl = document.getElementById("profile-editor-error");
+  errEl.classList.add("hidden");
+  const fErrEl = document.getElementById("profile-editor-feedback-error");
+  fErrEl.classList.add("hidden");
+
+  const [{ data: details }, { data: feedback }] = await Promise.all([
+    sb.from("employee_profile_details").select("*").eq("user_id", userId).maybeSingle(),
+    sb.from("feedback_entries").select("*").eq("user_id", userId).order("created_at", { ascending: false }),
+  ]);
+
+  document.getElementById("profile-editor-hire-date").value = details?.hire_date || "";
+  document.getElementById("profile-editor-vacation-balance").value =
+    details?.vacation_balance_days ?? "";
+
+  renderFeedbackList(document.getElementById("profile-editor-feedback-list"), feedback || [], {
+    withRemove: true,
+  });
+
+  document.getElementById("btn-save-profile-details").onclick = async () => {
+    errEl.classList.add("hidden");
+    savedMsg.classList.add("hidden");
+    const hireDate = document.getElementById("profile-editor-hire-date").value || null;
+    const balanceRaw = document.getElementById("profile-editor-vacation-balance").value;
+    const balance = balanceRaw === "" ? null : Number(balanceRaw);
+
+    const { error } = await sb.from("employee_profile_details").upsert({
+      user_id: userId,
+      hire_date: hireDate,
+      vacation_balance_days: balance,
+      updated_at: new Date().toISOString(),
+      updated_by: currentUser.id,
+    });
+
+    if (error) {
+      errEl.textContent = "Erro ao salvar: " + error.message;
+      errEl.classList.remove("hidden");
+      return;
+    }
+    savedMsg.classList.remove("hidden");
+    setTimeout(() => savedMsg.classList.add("hidden"), 2000);
+
+    // Se o admin editou o PRÓPRIO perfil, atualiza o card "Meus dados" também.
+    if (userId === currentUser.id) await loadProfileTab();
+  };
+
+  document.getElementById("btn-add-feedback").onclick = async () => {
+    fErrEl.classList.add("hidden");
+    const bodyEl = document.getElementById("profile-editor-feedback-body");
+    const body = bodyEl.value.trim();
+    if (!body) return;
+
+    const { error } = await sb.from("feedback_entries").insert({
+      user_id: userId,
+      body,
+      created_by: currentUser.id,
+    });
+
+    if (error) {
+      fErrEl.textContent = "Erro ao adicionar feedback: " + error.message;
+      fErrEl.classList.remove("hidden");
+      return;
+    }
+    bodyEl.value = "";
+    await loadProfileEditorFor(userId);
+    if (userId === currentUser.id) await loadProfileTab();
+  };
 }
 
 // ----------------------------------------------------------------------------

@@ -150,6 +150,14 @@
             <span class="tile-title">Aniversários</span>
             <span class="tile-desc">Acompanhe os aniversários da equipe</span>
           </button>
+
+          <button type="button" class="tile" data-goto="perfil">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.6 3.1-6.5 7-6.5s7 2.9 7 6.5"/></svg>
+            </span>
+            <span class="tile-title">Meu perfil</span>
+            <span class="tile-desc">Saldo de férias, feedbacks e admissão</span>
+          </button>
         </div>
       </section>
 
@@ -309,6 +317,66 @@
         <div id="manuals-list" class="card divide-y divide-slate-100 !p-0"></div>
         <div class="flex justify-center mt-5">
           <button type="button" id="manuals-load-more" class="hidden text-sm font-medium text-brand-navy border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-50">Carregar mais</button>
+        </div>
+      </section>
+
+      <!-- PAINEL: MEU PERFIL -->
+      <section id="panel-perfil" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Meu perfil</h2>
+        <p class="text-sm text-brand-slate mb-4">Estas informações são visíveis somente para você (e para administradores).</p>
+
+        <div class="grid sm:grid-cols-2 gap-4 mb-6">
+          <div class="stat-card">
+            <p class="stat-label">Admissão</p>
+            <p id="profile-hire-date" class="stat-value">—</p>
+          </div>
+          <div class="stat-card">
+            <p class="stat-label">Saldo de férias remanescentes</p>
+            <p id="profile-vacation-balance" class="stat-value">—</p>
+          </div>
+        </div>
+
+        <div class="card mb-6 !p-0">
+          <p class="text-sm font-medium p-4 pb-0">Histórico de feedbacks</p>
+          <div id="profile-feedback-list" class="divide-y divide-slate-100 mt-3"></div>
+        </div>
+
+        <div id="admin-profile-editor-box" class="card hidden">
+          <p class="text-sm font-medium mb-3">Editar perfil de um(a) colaborador(a) (somente administradores)</p>
+          <div class="mb-4">
+            <label class="block text-xs text-brand-slate mb-1">Colaborador(a)</label>
+            <select id="profile-editor-select" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full sm:w-80"></select>
+          </div>
+
+          <div id="profile-editor-fields" class="hidden">
+            <div class="flex flex-wrap gap-3 items-end mb-2">
+              <div>
+                <label class="block text-xs text-brand-slate mb-1">Data de admissão</label>
+                <input id="profile-editor-hire-date" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label class="block text-xs text-brand-slate mb-1">Saldo de férias (dias)</label>
+                <input id="profile-editor-vacation-balance" type="number" step="0.5" min="0" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-32" />
+              </div>
+              <button type="button" id="btn-save-profile-details" class="btn-primary">Salvar</button>
+              <span id="profile-editor-saved-msg" class="text-sm text-green-600 hidden">Salvo!</span>
+            </div>
+            <p id="profile-editor-error" class="text-sm text-red-500 mb-4 hidden"></p>
+
+            <p class="text-sm font-medium mb-2">Adicionar feedback</p>
+            <textarea id="profile-editor-feedback-body" placeholder="Escreva o feedback..." rows="3" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mb-2"></textarea>
+            <button type="button" id="btn-add-feedback" class="btn-primary">Adicionar feedback</button>
+            <p id="profile-editor-feedback-error" class="text-sm text-red-500 mt-2 hidden"></p>
+
+            <div class="mt-5">
+              <p class="text-sm font-medium mb-2">Histórico</p>
+              <div id="profile-editor-feedback-list" class="divide-y divide-slate-100"></div>
+            </div>
+          </div>
         </div>
       </section>
 
