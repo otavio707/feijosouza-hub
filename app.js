@@ -1459,6 +1459,7 @@ function renderFeedbackList(container, entries, { withRemove = false } = {}) {
           return;
         }
         await loadProfileEditorFor(currentEditorUserId);
+        if (f.user_id === currentUser.id) await loadProfileTab();
       });
     }
     container.appendChild(row);
