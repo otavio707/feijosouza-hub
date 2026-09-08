@@ -273,19 +273,23 @@ function easterDateForYear(year) {
   return new Date(year, month - 1, day);
 }
 
-function getBrazilHolidays(year) {
+// Feriados nacionais com nome (usado no calendário exibido na aba Férias —
+// nomes de verdade em vez de um rótulo genérico deixam a lista muito mais
+// fácil de ler). getBrazilHolidays() abaixo usa isto por baixo dos panos
+// para o Set de datas usado nos cálculos de dias úteis.
+function getBrazilHolidayEntries(year) {
   const fixed = [
-    [1, 1],   // Confraternização Universal
-    [4, 21],  // Tiradentes
-    [5, 1],   // Dia do Trabalho
-    [9, 7],   // Independência do Brasil
-    [10, 12], // Nossa Senhora Aparecida
-    [11, 2],  // Finados
-    [11, 15], // Proclamação da República
-    [11, 20], // Consciência Negra
-    [12, 25], // Natal
+    [1, 1, "Confraternização Universal"],
+    [4, 21, "Tiradentes"],
+    [5, 1, "Dia do Trabalho"],
+    [9, 7, "Independência do Brasil"],
+    [10, 12, "Nossa Senhora Aparecida"],
+    [11, 2, "Finados"],
+    [11, 15, "Proclamação da República"],
+    [11, 20, "Consciência Negra"],
+    [12, 25, "Natal"],
   ];
-  const holidays = fixed.map(([m, d]) => toISODate(new Date(year, m - 1, d)));
+  const entries = fixed.map(([m, d, name]) => ({ date: toISODate(new Date(year, m - 1, d)), name }));
 
   const easter = easterDateForYear(year);
   const offset = (days) => {
@@ -293,12 +297,16 @@ function getBrazilHolidays(year) {
     d.setDate(d.getDate() + days);
     return toISODate(d);
   };
-  holidays.push(offset(-48)); // Segunda de Carnaval
-  holidays.push(offset(-47)); // Terça de Carnaval
-  holidays.push(offset(-2)); // Sexta-feira Santa
-  holidays.push(offset(60)); // Corpus Christi
+  entries.push({ date: offset(-48), name: "Segunda de Carnaval" });
+  entries.push({ date: offset(-47), name: "Terça de Carnaval" });
+  entries.push({ date: offset(-2), name: "Sexta-feira Santa" });
+  entries.push({ date: offset(60), name: "Corpus Christi" });
 
-  return new Set(holidays);
+  return entries;
+}
+
+function getBrazilHolidays(year) {
+  return new Set(getBrazilHolidayEntries(year).map((e) => e.date));
 }
 
 // Feriados/recessos ADICIONAIS ao calendário nacional (tabela public.holidays
@@ -389,9 +397,10 @@ function calcVacationBalance(hireDateIso, vacations, todayIso) {
   const vestingYear = Number(vestingDateIso.split("-")[0]);
 
   // Primeiro trecho (parcial): meses restantes do ano do vesting (incluindo
-  // o próprio mês do vesting) × 22/12.
+  // o próprio mês do vesting) × 22/12, arredondado para cima — não faz
+  // sentido fração de dia de férias.
   const endOfVestingYear = `${vestingYear}-12-31`;
-  let balance = (monthDiffISO(vestingDateIso, endOfVestingYear) + 1) * VACATION_MONTHLY_RATE;
+  let balance = Math.ceil((monthDiffISO(vestingDateIso, endOfVestingYear) + 1) * VACATION_MONTHLY_RATE);
   let startPointIso = vestingDateIso;
 
   const todayYear = Number(today.split("-")[0]);
@@ -413,7 +422,7 @@ function calcVacationBalance(hireDateIso, vacations, todayIso) {
       return sum + countBusinessDays(start, v.end_date);
     }, 0);
 
-  return Math.round((balance - usedDays) * 10) / 10;
+  return balance - usedDays;
 }
 
 // ----------------------------------------------------------------------------
@@ -974,6 +983,17 @@ async function loadVacations() {
     };
   }
 
+  const toggleCalendarBtn = document.getElementById("btn-toggle-holidays-calendar");
+  if (toggleCalendarBtn) {
+    toggleCalendarBtn.onclick = () => {
+      const body = document.getElementById("holidays-calendar-body");
+      const icon = document.getElementById("holidays-calendar-toggle-icon");
+      const isHidden = body.classList.contains("hidden");
+      body.classList.toggle("hidden", !isHidden);
+      icon.textContent = isHidden ? "Ocultar calendário ▴" : "Ver calendário ▾";
+    };
+  }
+
   const holidayAddBox = document.getElementById("admin-add-holiday-box");
   if (holidayAddBox) {
     holidayAddBox.classList.toggle("hidden", !currentProfile?.is_admin);
@@ -1177,10 +1197,14 @@ async function renderVacationsList() {
   });
 }
 
-// Mostra o calendário de feriados (nacionais, calculados automaticamente, +
-// extras cadastrados em public.holidays) para o ano corrente e o próximo,
-// usados para os cálculos de dias úteis de férias. Chamado por loadHolidays()
-// sempre que os feriados extras são (re)carregados do banco.
+// Quantas linhas mostrar de cada vez no calendário — mantém a lista enxuta;
+// "Carregar mais" revela o restante sob demanda.
+let holidaysCalendarLimit = 6;
+
+// Mostra o calendário de feriados (nacionais, calculados automaticamente, com
+// nome de verdade, + extras cadastrados em public.holidays) a partir de hoje.
+// Lista compacta (uma linha por feriado) e paginada, para não poluir a tela.
+// Chamado por loadHolidays() sempre que os feriados extras são (re)carregados.
 function renderHolidaysCalendar() {
   const container = document.getElementById("holidays-calendar-list");
   if (!container) return;
@@ -1191,7 +1215,7 @@ function renderHolidaysCalendar() {
 
   const entries = [];
   years.forEach((year) => {
-    getBrazilHolidays(year).forEach((iso) => entries.push({ date: iso, name: "Feriado nacional", extra: false }));
+    getBrazilHolidayEntries(year).forEach((e) => entries.push({ date: e.date, name: e.name, extra: false }));
   });
   holidaysCache
     .filter((h) => years.includes(Number(h.date.split("-")[0])))
@@ -1203,20 +1227,21 @@ function renderHolidaysCalendar() {
   upcoming.sort((a, b) => a.date.localeCompare(b.date));
 
   if (upcoming.length === 0) {
-    container.innerHTML = `<p class="p-4 text-sm text-slate-400">Nenhum feriado futuro cadastrado.</p>`;
+    container.innerHTML = `<p class="p-3 text-sm text-slate-400">Nenhum feriado futuro cadastrado.</p>`;
+    updateLoadMoreButton("holidays-calendar-load-more", false);
     return;
   }
 
+  const visible = upcoming.slice(0, holidaysCalendarLimit);
+
   container.innerHTML = "";
-  upcoming.forEach((h) => {
+  visible.forEach((h) => {
     const row = document.createElement("div");
-    row.className = "flex items-center justify-between gap-4 py-2.5";
+    row.className = "flex items-center gap-3 py-1.5 text-sm";
     row.innerHTML = `
-      <div>
-        <p class="text-sm font-medium">${formatDateBR(h.date)}</p>
-        <p class="text-xs text-brand-slate">${escapeHtml(h.name)}${h.extra ? "" : " (calendário nacional)"}</p>
-      </div>
-      ${h.extra && currentProfile?.is_admin ? `<button type="button" class="text-sm text-red-500 hover:underline shrink-0" data-remove-holiday>Remover</button>` : ""}
+      <span class="text-brand-slate w-24 shrink-0">${formatDateBR(h.date)}</span>
+      <span class="flex-1 min-w-0 truncate">${escapeHtml(h.name)}</span>
+      ${h.extra && currentProfile?.is_admin ? `<button type="button" class="text-xs text-red-500 hover:underline shrink-0" data-remove-holiday>Remover</button>` : ""}
     `;
     const removeBtn = row.querySelector("[data-remove-holiday]");
     if (removeBtn) {
@@ -1230,6 +1255,11 @@ function renderHolidaysCalendar() {
       });
     }
     container.appendChild(row);
+  });
+
+  updateLoadMoreButton("holidays-calendar-load-more", upcoming.length > visible.length, () => {
+    holidaysCalendarLimit += 6;
+    renderHolidaysCalendar();
   });
 }
 
