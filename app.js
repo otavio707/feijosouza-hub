@@ -1185,6 +1185,7 @@ function renderHolidaysCalendar() {
   const container = document.getElementById("holidays-calendar-list");
   if (!container) return;
 
+  const today = toISODate(new Date());
   const thisYear = new Date().getFullYear();
   const years = [thisYear, thisYear + 1];
 
@@ -1196,15 +1197,18 @@ function renderHolidaysCalendar() {
     .filter((h) => years.includes(Number(h.date.split("-")[0])))
     .forEach((h) => entries.push({ date: h.date, name: h.name, extra: true, id: h.id }));
 
-  entries.sort((a, b) => a.date.localeCompare(b.date));
+  // Mostra só os feriados de hoje em diante — os que já passaram não são mais
+  // relevantes para quem está planejando férias.
+  const upcoming = entries.filter((h) => h.date >= today);
+  upcoming.sort((a, b) => a.date.localeCompare(b.date));
 
-  if (entries.length === 0) {
-    container.innerHTML = `<p class="p-4 text-sm text-slate-400">Nenhum feriado cadastrado.</p>`;
+  if (upcoming.length === 0) {
+    container.innerHTML = `<p class="p-4 text-sm text-slate-400">Nenhum feriado futuro cadastrado.</p>`;
     return;
   }
 
   container.innerHTML = "";
-  entries.forEach((h) => {
+  upcoming.forEach((h) => {
     const row = document.createElement("div");
     row.className = "flex items-center justify-between gap-4 py-2.5";
     row.innerHTML = `
