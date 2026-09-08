@@ -80,6 +80,9 @@ async function enterApp(user) {
     `Olá, ${currentProfile?.full_name || user.email}`;
 
   setupNav();
+  // Carrega os feriados extras (recesso, municipais) ANTES de tudo o que
+  // depende de contar dias úteis (dashboard, férias, saldo do perfil).
+  await loadHolidays();
   await Promise.all([
     loadDashboardSummary(),
     loadHomeOffice(),
@@ -175,6 +178,24 @@ function addDaysISO(iso, days) {
   const date = new Date(y, m - 1, d);
   date.setDate(date.getDate() + days);
   return toISODate(date);
+}
+
+// Soma meses a uma data ISO (usado no cálculo do período aquisitivo de
+// férias: vesting = admissão + 6 meses; 1 ano de casa = admissão + 12 meses).
+function addMonthsISO(iso, months) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setMonth(date.getMonth() + months);
+  return toISODate(date);
+}
+
+// Número de meses de calendário inteiros entre duas datas ISO (a >= b),
+// contando só ano/mês (ignora o dia). Usado para saber quantos meses
+// "cheios" faltam de um mês até dezembro do mesmo ano, por exemplo.
+function monthDiffISO(fromIso, toIso) {
+  const [fy, fm] = fromIso.split("-").map(Number);
+  const [ty, tm] = toIso.split("-").map(Number);
+  return (ty - fy) * 12 + (tm - fm);
 }
 
 function mondayOfISOWeek(iso) {
@@ -280,21 +301,29 @@ function getBrazilHolidays(year) {
   return new Set(holidays);
 }
 
+// Feriados/recessos ADICIONAIS ao calendário nacional (tabela public.holidays
+// — recesso de fim de ano, feriados municipais etc.), carregados do banco no
+// boot por loadHolidays(). countBusinessDays() e isHoliday() já consideram
+// este conjunto automaticamente assim que ele é preenchido.
+let extraHolidays = new Set();
+
+function isHoliday(iso, year) {
+  return getBrazilHolidays(year).has(iso) || extraHolidays.has(iso);
+}
+
 // Conta os dias úteis entre duas datas ISO (inclusive), excluindo fins de
-// semana e feriados nacionais.
+// semana, feriados nacionais e feriados/recessos extras cadastrados no hub.
 function countBusinessDays(startIso, endIso) {
   if (!startIso || !endIso || endIso < startIso) return 0;
   const [sy, sm, sd] = startIso.split("-").map(Number);
   const [ey, em, ed] = endIso.split("-").map(Number);
   const cur = new Date(sy, sm - 1, sd);
   const end = new Date(ey, em - 1, ed);
-  const holidaysByYear = {};
   let count = 0;
   while (cur <= end) {
     const year = cur.getFullYear();
-    if (!holidaysByYear[year]) holidaysByYear[year] = getBrazilHolidays(year);
     const dow = cur.getDay();
-    if (dow !== 0 && dow !== 6 && !holidaysByYear[year].has(toISODate(cur))) count++;
+    if (dow !== 0 && dow !== 6 && !isHoliday(toISODate(cur), year)) count++;
     cur.setDate(cur.getDate() + 1);
   }
   return count;
@@ -302,6 +331,89 @@ function countBusinessDays(startIso, endIso) {
 
 function formatBusinessDays(days) {
   return days === 1 ? "1 dia útil" : `${days} dias úteis`;
+}
+
+// Carrega os feriados/recessos extras cadastrados no hub (tabela
+// public.holidays) e preenche o conjunto `extraHolidays` usado por
+// isHoliday()/countBusinessDays(). Chamado uma vez no boot (enterApp),
+// antes de qualquer cálculo de dias úteis ou saldo de férias.
+let holidaysCache = [];
+
+async function loadHolidays() {
+  const { data, error } = await sb.from("holidays").select("*").order("date", { ascending: true });
+  if (error) {
+    console.error("Erro ao carregar feriados extras:", error);
+    return;
+  }
+  holidaysCache = data || [];
+  extraHolidays = new Set(holidaysCache.map((h) => h.date));
+  renderHolidaysCalendar();
+}
+
+// ----------------------------------------------------------------------------
+// Cálculo automático do saldo de férias
+// ----------------------------------------------------------------------------
+//
+// Regras confirmadas com o escritório:
+// - 22 dias úteis de férias por ano (proporcional a 22/12 dias úteis por mês
+//   completo, durante o período de transição do primeiro ano).
+// - Período aquisitivo de 6 meses: antes disso, saldo é 0.
+// - Ao completar 6 meses (data de vesting), a pessoa passa a ter direito aos
+//   dias proporcionais remanescentes daquele ano civil (meses restantes até
+//   dezembro, incluindo o mês do vesting, × 22/12).
+// - Enquanto a pessoa ainda não completou 1 ano de casa em 1º de janeiro de
+//   um ano seguinte, o saldo NÃO reseta: os 22 dias daquele ano se somam ao
+//   saldo remanescente (acúmulo/carry-over).
+// - A partir do 1º de janeiro em que a pessoa já tem mais de 1 ano de casa,
+//   o saldo é zerado e resetado para 22 dias úteis todo santo 1º de janeiro
+//   (independentemente do saldo anterior).
+// - Dias de férias já tirados (registrados em public.vacations) são
+//   descontados do saldo a partir do ponto de início da contagem corrente.
+const VACATION_ANNUAL_DAYS = 22;
+const VACATION_MONTHLY_RATE = VACATION_ANNUAL_DAYS / 12;
+const VACATION_VESTING_MONTHS = 6;
+const VACATION_FULL_YEAR_MONTHS = 12;
+
+// hireDateIso: data de admissão (ISO). vacations: array de { start_date, end_date }
+// (já tiradas/registradas). todayIso: data de referência (ISO), normalmente hoje.
+// Retorna o saldo em dias úteis (número, arredondado a 1 casa decimal), ou
+// null se não for possível calcular (sem data de admissão).
+function calcVacationBalance(hireDateIso, vacations, todayIso) {
+  if (!hireDateIso) return null;
+  const today = todayIso || toISODate(new Date());
+
+  const vestingDateIso = addMonthsISO(hireDateIso, VACATION_VESTING_MONTHS);
+  if (today < vestingDateIso) return 0; // ainda no período aquisitivo
+
+  const oneYearDateIso = addMonthsISO(hireDateIso, VACATION_FULL_YEAR_MONTHS);
+  const vestingYear = Number(vestingDateIso.split("-")[0]);
+
+  // Primeiro trecho (parcial): meses restantes do ano do vesting (incluindo
+  // o próprio mês do vesting) × 22/12.
+  const endOfVestingYear = `${vestingYear}-12-31`;
+  let balance = (monthDiffISO(vestingDateIso, endOfVestingYear) + 1) * VACATION_MONTHLY_RATE;
+  let startPointIso = vestingDateIso;
+
+  const todayYear = Number(today.split("-")[0]);
+  for (let y = vestingYear + 1; y <= todayYear; y++) {
+    const jan1 = `${y}-01-01`;
+    const hasFullYearByJan1 = jan1 >= oneYearDateIso;
+    if (hasFullYearByJan1) {
+      balance = VACATION_ANNUAL_DAYS; // zera tudo em 31/12, reseta 22 em 01/01
+      startPointIso = jan1;
+    } else {
+      balance += VACATION_ANNUAL_DAYS; // ainda no 1º ano: acumula/carrega
+    }
+  }
+
+  const usedDays = (vacations || [])
+    .filter((v) => v.end_date >= startPointIso)
+    .reduce((sum, v) => {
+      const start = v.start_date > startPointIso ? v.start_date : startPointIso;
+      return sum + countBusinessDays(start, v.end_date);
+    }, 0);
+
+  return Math.round((balance - usedDays) * 10) / 10;
 }
 
 // ----------------------------------------------------------------------------
@@ -851,6 +963,46 @@ async function renderAnnouncementsList() {
 // ----------------------------------------------------------------------------
 
 async function loadVacations() {
+  const toggleBtn = document.getElementById("btn-toggle-vacation-rules");
+  if (toggleBtn) {
+    toggleBtn.onclick = () => {
+      const body = document.getElementById("vacation-rules-body");
+      const icon = document.getElementById("vacation-rules-toggle-icon");
+      const isHidden = body.classList.contains("hidden");
+      body.classList.toggle("hidden", !isHidden);
+      icon.textContent = isHidden ? "Ocultar regras ▴" : "Ver regras ▾";
+    };
+  }
+
+  const holidayAddBox = document.getElementById("admin-add-holiday-box");
+  if (holidayAddBox) {
+    holidayAddBox.classList.toggle("hidden", !currentProfile?.is_admin);
+    if (currentProfile?.is_admin) {
+      document.getElementById("btn-add-holiday").onclick = async () => {
+        const dateEl = document.getElementById("holiday-date");
+        const nameEl = document.getElementById("holiday-name");
+        const errEl = document.getElementById("holiday-error");
+        errEl.classList.add("hidden");
+        const date = dateEl.value;
+        const name = nameEl.value.trim();
+        if (!date || !name) {
+          errEl.textContent = "Preencha a data e a descrição.";
+          errEl.classList.remove("hidden");
+          return;
+        }
+        const { error } = await sb.from("holidays").insert({ date, name, created_by: currentUser.id });
+        if (error) {
+          errEl.textContent = "Erro ao adicionar: " + error.message;
+          errEl.classList.remove("hidden");
+          return;
+        }
+        dateEl.value = "";
+        nameEl.value = "";
+        await loadHolidays();
+      };
+    }
+  }
+
   const startInput = document.getElementById("vacation-start");
   const endInput = document.getElementById("vacation-end");
   const previewEl = document.getElementById("vacation-days-preview");
@@ -1022,6 +1174,58 @@ async function renderVacationsList() {
     }
 
     list.appendChild(row);
+  });
+}
+
+// Mostra o calendário de feriados (nacionais, calculados automaticamente, +
+// extras cadastrados em public.holidays) para o ano corrente e o próximo,
+// usados para os cálculos de dias úteis de férias. Chamado por loadHolidays()
+// sempre que os feriados extras são (re)carregados do banco.
+function renderHolidaysCalendar() {
+  const container = document.getElementById("holidays-calendar-list");
+  if (!container) return;
+
+  const thisYear = new Date().getFullYear();
+  const years = [thisYear, thisYear + 1];
+
+  const entries = [];
+  years.forEach((year) => {
+    getBrazilHolidays(year).forEach((iso) => entries.push({ date: iso, name: "Feriado nacional", extra: false }));
+  });
+  holidaysCache
+    .filter((h) => years.includes(Number(h.date.split("-")[0])))
+    .forEach((h) => entries.push({ date: h.date, name: h.name, extra: true, id: h.id }));
+
+  entries.sort((a, b) => a.date.localeCompare(b.date));
+
+  if (entries.length === 0) {
+    container.innerHTML = `<p class="p-4 text-sm text-slate-400">Nenhum feriado cadastrado.</p>`;
+    return;
+  }
+
+  container.innerHTML = "";
+  entries.forEach((h) => {
+    const row = document.createElement("div");
+    row.className = "flex items-center justify-between gap-4 py-2.5";
+    row.innerHTML = `
+      <div>
+        <p class="text-sm font-medium">${formatDateBR(h.date)}</p>
+        <p class="text-xs text-brand-slate">${escapeHtml(h.name)}${h.extra ? "" : " (calendário nacional)"}</p>
+      </div>
+      ${h.extra && currentProfile?.is_admin ? `<button type="button" class="text-sm text-red-500 hover:underline shrink-0" data-remove-holiday>Remover</button>` : ""}
+    `;
+    const removeBtn = row.querySelector("[data-remove-holiday]");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", async () => {
+        const { error } = await sb.from("holidays").delete().eq("id", h.id);
+        if (error) {
+          alert("Erro ao remover feriado: " + error.message);
+          return;
+        }
+        await loadHolidays();
+      });
+    }
+    container.appendChild(row);
   });
 }
 
@@ -1466,19 +1670,41 @@ function renderFeedbackList(container, entries, { withRemove = false } = {}) {
   });
 }
 
+// Decide o saldo de férias a exibir: se houver um valor manual cadastrado em
+// employee_profile_details.vacation_balance_days, ele tem prioridade (não
+// sobrescrevemos o que os admins digitaram manualmente); senão, calculamos
+// automaticamente a partir da data de admissão e das férias já registradas.
+// Retorna { value, isManual }.
+function resolveVacationBalance(details, vacations) {
+  if (details?.vacation_balance_days !== null && details?.vacation_balance_days !== undefined) {
+    return { value: details.vacation_balance_days, isManual: true };
+  }
+  const calc = calcVacationBalance(details?.hire_date, vacations, toISODate(new Date()));
+  return { value: calc, isManual: false };
+}
+
 async function loadProfileTab() {
   // --- "Meus dados" (somente leitura, sempre a própria pessoa) ---
-  const [{ data: myDetails }, { data: myFeedback }] = await Promise.all([
+  const [{ data: myDetails }, { data: myFeedback }, { data: myVacations }] = await Promise.all([
     sb.from("employee_profile_details").select("*").eq("user_id", currentUser.id).maybeSingle(),
     sb.from("feedback_entries").select("*").eq("user_id", currentUser.id).order("created_at", { ascending: false }),
+    sb.from("vacations").select("start_date, end_date").eq("user_id", currentUser.id),
   ]);
 
   document.getElementById("profile-hire-date").textContent = myDetails?.hire_date
     ? formatDateBR(myDetails.hire_date)
     : "—";
-  document.getElementById("profile-vacation-balance").textContent = formatVacationBalance(
-    myDetails?.vacation_balance_days
-  );
+
+  const resolvedBalance = resolveVacationBalance(myDetails, myVacations || []);
+  document.getElementById("profile-vacation-balance").textContent = formatVacationBalance(resolvedBalance.value);
+  const subEl = document.getElementById("profile-vacation-balance-sub");
+  if (subEl) {
+    subEl.textContent = !myDetails?.hire_date
+      ? ""
+      : resolvedBalance.isManual
+      ? "Valor definido manualmente pela administração"
+      : "Calculado automaticamente a partir da data de admissão";
+  }
 
   renderFeedbackList(document.getElementById("profile-feedback-list"), myFeedback || []);
 
@@ -1524,14 +1750,24 @@ async function loadProfileEditorFor(userId) {
   const fErrEl = document.getElementById("profile-editor-feedback-error");
   fErrEl.classList.add("hidden");
 
-  const [{ data: details }, { data: feedback }] = await Promise.all([
+  const [{ data: details }, { data: feedback }, { data: vacations }] = await Promise.all([
     sb.from("employee_profile_details").select("*").eq("user_id", userId).maybeSingle(),
     sb.from("feedback_entries").select("*").eq("user_id", userId).order("created_at", { ascending: false }),
+    sb.from("vacations").select("start_date, end_date").eq("user_id", userId),
   ]);
 
   document.getElementById("profile-editor-hire-date").value = details?.hire_date || "";
   document.getElementById("profile-editor-vacation-balance").value =
     details?.vacation_balance_days ?? "";
+
+  const editorBalanceHint = document.getElementById("profile-editor-vacation-balance-hint");
+  if (editorBalanceHint) {
+    const autoCalc = calcVacationBalance(details?.hire_date, vacations || [], toISODate(new Date()));
+    editorBalanceHint.textContent =
+      autoCalc === null
+        ? "Sem data de admissão cadastrada, não é possível calcular automaticamente."
+        : `Cálculo automático (sem override manual): ${formatVacationBalance(autoCalc)}.`;
+  }
 
   renderFeedbackList(document.getElementById("profile-editor-feedback-list"), feedback || [], {
     withRemove: true,
