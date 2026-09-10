@@ -1673,6 +1673,50 @@ function formatVacationBalance(days) {
   return `${rounded} dia${rounded === 1 ? "" : "s"}`;
 }
 
+// Nota opcional de feedback, sugestão do sócio: de -3 (bem negativo) a +3
+// (bem positivo), 0 = neutro. Negativos em vermelho, positivos em verde,
+// neutro em cinza, para dar um sinal visual rápido do tom do feedback.
+const FEEDBACK_SCORES = [-3, -2, -1, 0, 1, 2, 3];
+
+function feedbackScoreColorClasses(score) {
+  if (score < 0) return { text: "text-red-600", border: "border-red-300", bg: "bg-red-50", ring: "ring-red-400" };
+  if (score > 0) return { text: "text-green-600", border: "border-green-300", bg: "bg-green-50", ring: "ring-green-400" };
+  return { text: "text-slate-500", border: "border-slate-300", bg: "bg-slate-100", ring: "ring-slate-400" };
+}
+
+function formatFeedbackScore(score) {
+  return score > 0 ? `+${score}` : `${score}`;
+}
+
+function feedbackScoreBadgeHtml(score) {
+  if (score === null || score === undefined) return "";
+  const c = feedbackScoreColorClasses(score);
+  return `<span class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-semibold border shrink-0 ${c.text} ${c.bg} ${c.border}">${formatFeedbackScore(score)}</span>`;
+}
+
+// Nota selecionada no formulário "Adicionar feedback" (somente administradores).
+// Reseta para 0 (neutro) a cada colaborador(a) carregado(a) e após cada envio.
+let selectedFeedbackScore = 0;
+
+function renderScorePicker() {
+  const container = document.getElementById("feedback-score-picker");
+  if (!container) return;
+  container.innerHTML = "";
+  FEEDBACK_SCORES.forEach((score) => {
+    const c = feedbackScoreColorClasses(score);
+    const isActive = score === selectedFeedbackScore;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `w-9 h-9 rounded-full border text-sm font-medium ${c.text} ${c.border} ${isActive ? `${c.bg} ring-2 ring-offset-1 ${c.ring}` : "bg-white"}`;
+    btn.textContent = formatFeedbackScore(score);
+    btn.addEventListener("click", () => {
+      selectedFeedbackScore = score;
+      renderScorePicker();
+    });
+    container.appendChild(btn);
+  });
+}
+
 function renderFeedbackList(container, entries, { withRemove = false } = {}) {
   if (!entries || entries.length === 0) {
     container.innerHTML = `<p class="p-4 text-sm text-slate-400">Nenhum feedback registrado ainda.</p>`;
@@ -1683,11 +1727,14 @@ function renderFeedbackList(container, entries, { withRemove = false } = {}) {
     const row = document.createElement("div");
     row.className = "p-4";
     row.innerHTML = `
-      <div class="flex items-start justify-between gap-4">
-        <p class="text-sm whitespace-pre-line min-w-0">${escapeHtml(f.body)}</p>
+      <div class="flex items-start gap-3">
+        ${feedbackScoreBadgeHtml(f.score)}
+        <div class="min-w-0 flex-1">
+          <p class="text-sm whitespace-pre-line">${escapeHtml(f.body)}</p>
+          <p class="text-xs text-brand-mist mt-1">${formatDateTimeBR(f.created_at)}</p>
+        </div>
         ${withRemove ? `<button type="button" class="text-sm text-red-500 hover:underline shrink-0" data-remove-feedback>Remover</button>` : ""}
       </div>
-      <p class="text-xs text-brand-mist mt-1">${formatDateTimeBR(f.created_at)}</p>
     `;
     if (withRemove) {
       row.querySelector("[data-remove-feedback]").addEventListener("click", async () => {
@@ -1794,6 +1841,9 @@ async function loadProfileEditorFor(userId) {
   document.getElementById("profile-editor-vacation-balance").value =
     details?.vacation_balance_days ?? "";
 
+  selectedFeedbackScore = 0;
+  renderScorePicker();
+
   const editorBalanceHint = document.getElementById("profile-editor-vacation-balance-hint");
   if (editorBalanceHint) {
     const autoCalc = calcVacationBalance(details?.hire_date, vacations || [], toISODate(new Date()));
@@ -1843,6 +1893,7 @@ async function loadProfileEditorFor(userId) {
     const { error } = await sb.from("feedback_entries").insert({
       user_id: userId,
       body,
+      score: selectedFeedbackScore,
       created_by: currentUser.id,
     });
 
@@ -1852,6 +1903,7 @@ async function loadProfileEditorFor(userId) {
       return;
     }
     bodyEl.value = "";
+    selectedFeedbackScore = 0;
     await loadProfileEditorFor(userId);
     if (userId === currentUser.id) await loadProfileTab();
   };
