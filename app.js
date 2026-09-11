@@ -1717,6 +1717,19 @@ function renderScorePicker() {
   });
 }
 
+// Busca, numa única consulta, o nome de quem deu cada feedback (coluna
+// created_by) e devolve as mesmas entradas com um campo extra `authorName`.
+// A tabela profiles é de leitura aberta para todo autenticado, então isso
+// funciona tanto na visão da própria pessoa quanto na do admin.
+async function attachFeedbackAuthors(entries) {
+  const ids = [...new Set((entries || []).map((f) => f.created_by).filter(Boolean))];
+  if (ids.length === 0) return entries || [];
+
+  const { data: authors } = await sb.from("profiles").select("id, full_name, email").in("id", ids);
+  const nameById = new Map((authors || []).map((a) => [a.id, a.full_name || a.email]));
+  return entries.map((f) => ({ ...f, authorName: f.created_by ? nameById.get(f.created_by) || null : null }));
+}
+
 function renderFeedbackList(container, entries, { withRemove = false } = {}) {
   if (!entries || entries.length === 0) {
     container.innerHTML = `<p class="p-4 text-sm text-slate-400">Nenhum feedback registrado ainda.</p>`;
@@ -1731,7 +1744,7 @@ function renderFeedbackList(container, entries, { withRemove = false } = {}) {
         ${feedbackScoreBadgeHtml(f.score)}
         <div class="min-w-0 flex-1">
           <p class="text-sm whitespace-pre-line">${escapeHtml(f.body)}</p>
-          <p class="text-xs text-brand-mist mt-1">${formatDateTimeBR(f.created_at)}</p>
+          <p class="text-xs text-brand-mist mt-1">${formatDateTimeBR(f.created_at)}${f.authorName ? ` · por ${escapeHtml(f.authorName)}` : ""}</p>
         </div>
         ${withRemove ? `<button type="button" class="text-sm text-red-500 hover:underline shrink-0" data-remove-feedback>Remover</button>` : ""}
       </div>
@@ -1787,7 +1800,7 @@ async function loadProfileTab() {
       : "Calculado automaticamente a partir da data de admissão";
   }
 
-  renderFeedbackList(document.getElementById("profile-feedback-list"), myFeedback || []);
+  renderFeedbackList(document.getElementById("profile-feedback-list"), await attachFeedbackAuthors(myFeedback || []));
 
   // --- edição por administradores, para qualquer colaborador(a) ---
   const adminBox = document.getElementById("admin-profile-editor-box");
@@ -1853,7 +1866,7 @@ async function loadProfileEditorFor(userId) {
         : `Cálculo automático (sem override manual): ${formatVacationBalance(autoCalc)}.`;
   }
 
-  renderFeedbackList(document.getElementById("profile-editor-feedback-list"), feedback || [], {
+  renderFeedbackList(document.getElementById("profile-editor-feedback-list"), await attachFeedbackAuthors(feedback || []), {
     withRemove: true,
   });
 
