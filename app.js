@@ -1617,7 +1617,7 @@ async function renderManualsList() {
         return;
       }
       // Abre a aba antes do await, para o navegador não bloquear o pop-up.
-      const newTab = window.open("", "_blank");
+      const newTab = window.open("", "_blank", "noopener");
       const { data, error } = await sb.storage.from("manuals").createSignedUrl(m.storage_path, 300);
       if (error || !data?.signedUrl) {
         if (newTab) newTab.close();
