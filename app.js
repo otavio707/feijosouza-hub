@@ -209,6 +209,46 @@ function formatWeekRange(weekStartIso) {
   return `Semana de ${formatDateBR(weekStartIso)} a ${formatDateBR(endIso)}`;
 }
 
+// A escala dos estagiários passou a ser quinzenal a partir do rodízio de
+// 14/09/2026 (antes disso era semanal). Os rodízios seguintes caem a cada 14
+// dias a partir desse marco: 28/09, 12/10, 26/10, etc.
+const INTERN_ROTATION_ANCHOR_ISO = "2026-09-14";
+
+// Dado um ISO qualquer, encontra a segunda-feira de início da quinzena de
+// rodízio que o contém, alinhada ao marco acima (funciona também para datas
+// anteriores ao marco, projetando o ciclo de 14 em 14 dias para trás).
+function internRotationStartForDate(iso) {
+  const anchor = new Date(INTERN_ROTATION_ANCHOR_ISO + "T00:00:00");
+  const target = new Date(iso + "T00:00:00");
+  const diffDays = Math.round((target - anchor) / 86400000);
+  const periodIndex = Math.floor(diffDays / 14);
+  const start = new Date(anchor);
+  start.setDate(start.getDate() + periodIndex * 14);
+  return toISODate(start);
+}
+
+// Data padrão a sugerir no formulário de nova alocação: a quinzena de
+// rodízio corrente (ou, antes de 14/09/2026, já o primeiro rodízio quinzenal).
+function defaultInternRotationStartIso() {
+  const todayIso = toISODate(new Date());
+  return todayIso < INTERN_ROTATION_ANCHOR_ISO
+    ? INTERN_ROTATION_ANCHOR_ISO
+    : internRotationStartForDate(todayIso);
+}
+
+// Mostra o período de uma alocação de estagiário(a): quinzena (Segunda a
+// Sexta da 2ª semana) para rodízios a partir de 14/09/2026, ou semana (como
+// era antes) para alocações mais antigas — para não rotular errado o
+// histórico anterior à mudança para o rodízio quinzenal.
+function formatInternPeriodRange(startIso) {
+  if (!startIso) return "Período não informado";
+  if (startIso >= INTERN_ROTATION_ANCHOR_ISO) {
+    const endIso = addDaysISO(startIso, 11);
+    return `Quinzena de ${formatDateBR(startIso)} a ${formatDateBR(endIso)}`;
+  }
+  return formatWeekRange(startIso);
+}
+
 function escapeHtml(str) {
   return String(str ?? "")
     .replace(/&/g, "&amp;")
@@ -1274,7 +1314,7 @@ async function loadInternSchedule() {
 
     const weekInput = document.getElementById("intern-week");
     if (!weekInput.value) {
-      weekInput.value = toISODate(getMondayOfWeek(new Date()));
+      weekInput.value = defaultInternRotationStartIso();
     }
 
     document.getElementById("btn-add-intern").onclick = async () => {
@@ -1286,7 +1326,7 @@ async function loadInternSchedule() {
       errorEl.classList.add("hidden");
 
       if (!name || !project || !weekValue) {
-        errorEl.textContent = "Preencha nome, projeto/núcleo e a semana.";
+        errorEl.textContent = "Preencha nome, projeto/núcleo e a quinzena.";
         errorEl.classList.remove("hidden");
         return;
       }
@@ -1295,7 +1335,7 @@ async function loadInternSchedule() {
         intern_name: name,
         project,
         notes: notes || null,
-        week_start: mondayOfISOWeek(weekValue),
+        week_start: internRotationStartForDate(weekValue),
         created_by: currentUser.id,
       });
 
@@ -1308,7 +1348,7 @@ async function loadInternSchedule() {
       document.getElementById("intern-name").value = "";
       document.getElementById("intern-project").value = "";
       document.getElementById("intern-notes").value = "";
-      document.getElementById("intern-week").value = toISODate(getMondayOfWeek(new Date()));
+      document.getElementById("intern-week").value = defaultInternRotationStartIso();
       await renderInternsList();
     };
   } else {
@@ -1347,7 +1387,7 @@ async function renderInternsList() {
       currentWeek = i.week_start;
       const header = document.createElement("p");
       header.className = `px-4 pb-1 text-xs font-semibold uppercase tracking-wide text-brand-mist ${firstGroup ? "pt-4" : "pt-5"}`;
-      header.textContent = formatWeekRange(currentWeek);
+      header.textContent = formatInternPeriodRange(currentWeek);
       list.appendChild(header);
       firstGroup = false;
     }
@@ -1392,7 +1432,7 @@ async function renderInternsList() {
               <input type="text" data-edit-notes value="${escapeHtml(i.notes || "")}" placeholder="Observações (opcional)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
             </div>
             <div class="mt-3">
-              <label class="block text-xs text-brand-slate mb-1">Semana</label>
+              <label class="block text-xs text-brand-slate mb-1">Início da quinzena</label>
               <input type="date" data-edit-week value="${i.week_start}" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
             </div>
             <p data-edit-error class="text-sm text-red-500 mt-2 hidden"></p>
@@ -1410,7 +1450,7 @@ async function renderInternsList() {
           const newWeek = viewDiv.querySelector("[data-edit-week]").value;
           const errEl = viewDiv.querySelector("[data-edit-error]");
           if (!newName || !newProject || !newWeek) {
-            errEl.textContent = "Preencha nome, projeto/núcleo e a semana.";
+            errEl.textContent = "Preencha nome, projeto/núcleo e a quinzena.";
             errEl.classList.remove("hidden");
             return;
           }
@@ -1420,7 +1460,7 @@ async function renderInternsList() {
               intern_name: newName,
               project: newProject,
               notes: newNotes || null,
-              week_start: mondayOfISOWeek(newWeek),
+              week_start: internRotationStartForDate(newWeek),
             })
             .eq("id", i.id);
           if (error) {
