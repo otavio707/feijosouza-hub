@@ -155,7 +155,7 @@ create trigger on_auth_user_created
 -- 6. Depois de rodar este script e a primeira pessoa (você) fizer login pelo
 --    site uma vez, torne-se administrador rodando (troque o e-mail):
 -- ----------------------------------------------------------------------------
--- update public.profiles set is_admin = true where email = 'otavio@feijosouza.com.br';
+-- update public.profiles set is_admin = true where email = 'seu-email@feijosouza.com.br';
 
 -- ----------------------------------------------------------------------------
 -- 7. MANUALS — upload de arquivo (Word/PDF) direto no hub, em vez de link
