@@ -11,6 +11,13 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Quicksand:wght@500;600;700&display=swap" rel="stylesheet" />
 
+<!-- ATENÇÃO (segurança): o "Play CDN" do Tailwind (cdn.tailwindcss.com) não
+     oferece nenhuma forma suportada de fixar uma versão específica nem de
+     usar Subresource Integrity — é um serviço do próprio time do Tailwind
+     que sempre serve a última versão, por design (ver documentação oficial
+     em tailwindcss.com/docs/installation/play-cdn). Fixar isso de verdade
+     exigiria migrar para uma instalação com build step (fora do escopo de
+     uma correção pontual); por ora este é um risco aceito e documentado. -->
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
   tailwind.config = {
@@ -35,7 +42,12 @@
     },
   };
 </script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- Versão fixada (em vez de "@2" flutuante) por segurança: assim uma
+     atualização da biblioteca não passa a rodar automaticamente no Hub sem
+     revisão. Ao atualizar, confira a versão mais recente em
+     https://www.npmjs.com/package/@supabase/supabase-js antes de trocar o
+     número abaixo. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0"></script>
 <link rel="stylesheet" href="style.css" />
 </head>
 <body class="min-h-screen bg-brand-bg text-brand-charcoal font-body">
