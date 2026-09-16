@@ -1490,7 +1490,7 @@ async function loadManuals() {
     addBox.classList.remove("hidden");
     document.getElementById("btn-add-manual").onclick = async () => {
       const title = document.getElementById("manual-title").value.trim();
-      const category = document.getElementById("manual-category").value.trim();
+     
       const fileInput = document.getElementById("manual-file");
       const file = fileInput.files[0];
       const errorEl = document.getElementById("manual-upload-error");
@@ -1528,7 +1528,6 @@ async function loadManuals() {
 
       const { error: insertError } = await sb.from("manuals").insert({
         title,
-        category,
         storage_path: storagePath,
         file_name: file.name,
         created_by: currentUser.id,
@@ -1543,7 +1542,7 @@ async function loadManuals() {
       }
 
       document.getElementById("manual-title").value = "";
-      document.getElementById("manual-category").value = "";
+     
       fileInput.value = "";
       btn.disabled = false;
       btn.textContent = "Adicionar";
@@ -1571,11 +1570,11 @@ async function loadManuals() {
 async function renderManualsList() {
   const list = document.getElementById("manuals-list");
 
-  let query = sb.from("manuals").select("*", { count: "exact" }).order("category").order("title");
+  let query = sb.from("manuals").select("*", { count: "exact" }).order("title");
   const term = manualsSearch.trim();
   if (term) {
     const safeTerm = term.replace(/[%,]/g, "");
-    query = query.or(`title.ilike.%${safeTerm}%,category.ilike.%${safeTerm}%`);
+    query = query.ilike("title", `%${safeTerm}%`);
   }
 
   const { data: manuals, count, error } = await query.range(0, manualsLimit - 1);
@@ -1601,7 +1600,7 @@ async function renderManualsList() {
       <div class="flex items-center justify-between gap-4" data-view>
         <div class="min-w-0">
           <button type="button" data-open class="font-medium text-brand-navy hover:underline text-left">${escapeHtml(m.title)}</button>
-          ${m.category ? `<p class="text-sm text-slate-500">${escapeHtml(m.category)}</p>` : ""}
+         
         </div>
         ${currentProfile?.is_admin ? `
           <div class="flex gap-3 shrink-0">
@@ -1654,7 +1653,7 @@ async function renderManualsList() {
           <div class="w-full">
             <div class="grid sm:grid-cols-2 gap-3">
               <input type="text" data-edit-title value="${escapeHtml(m.title)}" placeholder="Título" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
-              <input type="text" data-edit-category value="${escapeHtml(m.category || "")}" placeholder="Categoria" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+             
             </div>
             <p class="text-xs text-brand-mist mt-2">Para trocar o arquivo, remova este manual e cadastre de novo.</p>
             <p data-edit-error class="text-sm text-red-500 mt-2 hidden"></p>
@@ -1667,7 +1666,7 @@ async function renderManualsList() {
         viewDiv.querySelector("[data-cancel]").addEventListener("click", () => renderManualsList());
         viewDiv.querySelector("[data-save]").addEventListener("click", async () => {
           const newTitle = viewDiv.querySelector("[data-edit-title]").value.trim();
-          const newCategory = viewDiv.querySelector("[data-edit-category]").value.trim();
+         
           const errEl = viewDiv.querySelector("[data-edit-error]");
           if (!newTitle) {
             errEl.textContent = "Preencha o título.";
@@ -1676,7 +1675,7 @@ async function renderManualsList() {
           }
           const { error } = await sb
             .from("manuals")
-            .update({ title: newTitle, category: newCategory || null })
+            .update({ title: newTitle })
             .eq("id", m.id);
           if (error) {
             errEl.textContent = "Erro ao salvar: " + error.message;
