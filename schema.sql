@@ -413,3 +413,56 @@ create policy "intern_assignments_admin_write"
 -- rastro): e-mail fora do domínio foi bloqueado com
 -- "ERROR: P0001: Domínio de e-mail não autorizado..."; e-mail
 -- @feijosouza.com.br passou normalmente.
+
+-- ----------------------------------------------------------------------------
+-- 16. FEEDBACK_ENTRIES — feedbacks dados por administradores para cada
+--     colaborador(a), com suporte a data retroativa (created_at editável).
+--     OBS: esta tabela já existia em produção (criada direto pelo SQL
+--     Editor) e só foi documentada aqui depois — reconstruída a partir do
+--     schema e das políticas confirmadas em produção em 2026-09-16.
+-- ----------------------------------------------------------------------------
+create table if not exists public.feedback_entries (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  body text not null,
+  score smallint,
+  created_by uuid references public.profiles (id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.feedback_entries enable row level security;
+
+drop policy if exists "feedback_select_own_or_admin" on public.feedback_entries;
+create policy "feedback_select_own_or_admin"
+  on public.feedback_entries for select
+  to authenticated
+  using (
+    auth.uid() = user_id
+    or exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin)
+  );
+
+drop policy if exists "feedback_admin_write" on public.feedback_entries;
+create policy "feedback_admin_write"
+  on public.feedback_entries for all
+  to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+-- ----------------------------------------------------------------------------
+-- 17. EMPLOYEE_PROFILE_DETAILS — também já existe em produção, com RLS
+--     ativado e as políticas "profile_details_select_own_or_admin" (SELECT,
+--     mesmo padrão "própria linha OU admin" acima) e
+--     "profile_details_admin_write" (ALL, somente admin) confirmadas em
+--     2026-09-16 — mesmo padrão de segurança das demais tabelas deste
+--     arquivo.
+--
+--     PENDENTE: as colunas exatas dessa tabela ainda não foram copiadas para
+--     este arquivo (o acesso ao SQL Editor caiu no meio da revisão). Antes de
+--     usar este arquivo para recriar o banco do zero, rode no SQL Editor do
+--     Supabase e cole o resultado aqui:
+--
+--   select column_name, data_type, column_default, is_nullable
+--   from information_schema.columns
+--   where table_name = 'employee_profile_details'
+--   order by ordinal_position;
+-- ----------------------------------------------------------------------------
