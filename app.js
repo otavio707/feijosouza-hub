@@ -1617,28 +1617,19 @@ async function renderManualsList() {
       }
       // Abre a aba antes do await, para o navegador não bloquear o pop-up.
       const newTab = window.open("", "_blank");
-        console.log("DBG1 newTab truthy?", !!newTab, "closed?", newTab && newTab.closed);
         if (newTab) {
           try {
             newTab.opener = null;
-            console.log("DBG2 opener nulled ok");
-          } catch (e) { console.log("DBG2 opener null ERROR", e.message); }
+          } catch (e) {}
         }
         const { data, error } = await sb.storage.from("manuals").createSignedUrl(m.storage_path, 300);
-        console.log("DBG3 signedUrl result", { hasError: !!error, errMsg: error && error.message, hasUrl: !!(data && data.signedUrl) });
         if (error || !data?.signedUrl) {
           if (newTab) newTab.close();
           alert("Não foi possível abrir o arquivo agora. Tente novamente.");
           return;
         }
-        console.log("DBG4 before nav, newTab closed?", newTab && newTab.closed);
-        try {
-          if (newTab) newTab.location.href = data.signedUrl;
-          console.log("DBG5 nav assignment done, no throw");
-        } catch (e) { console.log("DBG5 nav assignment ERROR", e.message); }
-        try {
-          console.log("DBG6 readback href", newTab && newTab.location && newTab.location.href);
-        } catch (e) { console.log("DBG6 readback ERROR", e.message); }
+        if (newTab) newTab.location.href = data.signedUrl;
+
     });
 
     const removeBtn = row.querySelector("[data-remove]");
