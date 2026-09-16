@@ -1901,6 +1901,8 @@ async function loadProfileEditorFor(userId) {
 
   selectedFeedbackScore = 0;
   renderScorePicker();
+      const feedbackDateEl = document.getElementById("profile-editor-feedback-date");
+      if (feedbackDateEl) feedbackDateEl.value = toISODate(new Date());
 
   const editorBalanceHint = document.getElementById("profile-editor-vacation-balance-hint");
   if (editorBalanceHint) {
@@ -1948,11 +1950,15 @@ async function loadProfileEditorFor(userId) {
     const body = bodyEl.value.trim();
     if (!body) return;
 
-    const { error } = await sb.from("feedback_entries").insert({
+    const dateEl = document.getElementById("profile-editor-feedback-date");
+      const feedbackDateValue = dateEl?.value || toISODate(new Date());
+      const feedbackCreatedAt = new Date(`${feedbackDateValue}T12:00:00`).toISOString();
+      const { error } = await sb.from("feedback_entries").insert({
       user_id: userId,
       body,
       score: selectedFeedbackScore,
       created_by: currentUser.id,
+        created_at: feedbackCreatedAt,
     });
 
     if (error) {
@@ -1962,6 +1968,7 @@ async function loadProfileEditorFor(userId) {
     }
     bodyEl.value = "";
     selectedFeedbackScore = 0;
+      if (dateEl) dateEl.value = toISODate(new Date());
     await loadProfileEditorFor(userId);
     if (userId === currentUser.id) await loadProfileTab();
   };
