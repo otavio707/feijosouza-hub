@@ -1986,3 +1986,4 @@ sb.auth.onAuthStateChange((_event, session) => {
 });
 
 boot();
+
