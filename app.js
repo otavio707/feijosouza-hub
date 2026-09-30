@@ -1451,6 +1451,12 @@ async function renderInternsList() {
   const overridesByPeriod = new Map(); // week_start -> Map(intern_name -> project)
   (interns || []).forEach((i) => {
     if (!fixedNames.has(i.intern_name)) return;
+    // Só é uma exceção de verdade se o valor gravado DIVERGIR do calculado
+    // pela fórmula para aquela quinzena — uma linha que só confirma o valor
+    // automático (por ex., gravada manualmente antes desta mudança) não deve
+    // aparecer marcada como "(exceção)".
+    const predicted = computeInternRotationForPeriod(i.week_start)[i.intern_name];
+    if (i.project === predicted) return;
     if (!overridesByPeriod.has(i.week_start)) overridesByPeriod.set(i.week_start, new Map());
     overridesByPeriod.get(i.week_start).set(i.intern_name, i.project);
   });
