@@ -334,10 +334,12 @@
           Voltar
         </button>
         <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Escala dos estagiários</h2>
-        <p class="text-sm text-brand-slate mb-4">Alocação por projeto/núcleo, quinzena a quinzena.</p>
+        <p class="text-sm text-brand-slate mb-4">O núcleo de cada estagiária é calculado automaticamente a cada quinzena (Sherwood → Licitações → Embraprec + Geral). Abaixo, o núcleo atual e o da próxima quinzena.</p>
+
+        <div id="interns-rotation-summary" class="mb-6"></div>
 
         <div id="admin-add-intern-box" class="card mb-6 hidden">
-          <p class="text-sm font-medium mb-3">Adicionar alocação (somente administradores)</p>
+          <p class="text-sm font-medium mb-3">Registrar exceção/observação (somente administradores)</p>
           <div class="grid sm:grid-cols-3 gap-3">
             <input id="intern-name" type="text" placeholder="Nome do estagiário" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
             <input id="intern-project" type="text" placeholder="Projeto/Núcleo" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
@@ -351,6 +353,7 @@
           <button type="button" id="btn-add-intern" class="mt-3 btn-primary">Adicionar</button>
         </div>
 
+        <p class="text-xs font-semibold uppercase tracking-wide text-brand-mist mb-2">Exceções e observações (quinzena atual em diante)</p>
         <div id="interns-list" class="card divide-y divide-slate-100 !p-0"></div>
       </section>
 
