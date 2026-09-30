@@ -236,6 +236,40 @@ function defaultInternRotationStartIso() {
     : internRotationStartForDate(todayIso);
 }
 
+// ----------------------------------------------------------------------------
+// Cálculo automático do rodízio (Sherwood → Licitações → Embraprec + Geral)
+// ----------------------------------------------------------------------------
+//
+// Combinado com o escritório: a cada quinzena, cada estagiária avança uma
+// posição nessa sequência fixa, indefinidamente. Antes, uma automação externa
+// precisava "lembrar" de gravar isso na tabela intern_assignments toda
+// quinzena — e quando a sessão usada por ela expirava sem ninguém perceber,
+// o rodízio simplesmente parava de avançar, sem avisar ninguém (foi o que
+// aconteceu antes desta mudança). Calculando o núcleo por fórmula, a partir
+// só da data de hoje, o Hub sempre mostra o valor certo assim que a tela é
+// aberta — não existe mais nada para "rodar" ou agendar, e portanto nada que
+// possa silenciosamente parar de rodar.
+const INTERN_ROTATION_SEQUENCE = ["Sherwood", "Licitações", "Embraprec + Geral"];
+const INTERN_ROTATION_BASE_POSITION = { Juliana: 0, Victória: 1, Luiza: 2 };
+
+// Dado o início (ISO) de uma quinzena já alinhada ao marco (produzido por
+// internRotationStartForDate, por defaultInternRotationStartIso, ou por soma
+// de múltiplos de 14 dias a partir de um desses), devolve o núcleo de cada
+// estagiária fixa do rodízio nessa quinzena — puramente por cálculo.
+function computeInternRotationForPeriod(periodStartIso) {
+  const anchor = new Date(INTERN_ROTATION_ANCHOR_ISO + "T00:00:00");
+  const target = new Date(periodStartIso + "T00:00:00");
+  const diffDays = Math.round((target - anchor) / 86400000);
+  const periodIndex = Math.floor(diffDays / 14);
+  const n = INTERN_ROTATION_SEQUENCE.length;
+  const result = {};
+  for (const [name, basePos] of Object.entries(INTERN_ROTATION_BASE_POSITION)) {
+    const idx = (((basePos + periodIndex) % n) + n) % n; // módulo seguro para periodIndex negativo
+    result[name] = INTERN_ROTATION_SEQUENCE[idx];
+  }
+  return result;
+}
+
 // Mostra o período de uma alocação de estagiário(a): quinzena (Segunda a
 // Sexta da 2ª semana) para rodízios a partir de 14/09/2026, ou semana (como
 // era antes) para alocações mais antigas — para não rotular errado o
@@ -1358,25 +1392,82 @@ async function loadInternSchedule() {
   await renderInternsList();
 }
 
+// Monta o card de uma quinzena (atual ou próxima) com o núcleo calculado de
+// cada estagiária fixa, respeitando uma eventual exceção manual gravada na
+// tabela (overridesMap: intern_name -> project) para aquela quinzena.
+function renderInternRotationCard(periodStartIso, overridesMap, label) {
+  const computed = computeInternRotationForPeriod(periodStartIso);
+  const rows = Object.keys(INTERN_ROTATION_BASE_POSITION)
+    .map((name) => {
+      const isOverride = overridesMap.has(name);
+      const project = isOverride ? overridesMap.get(name) : computed[name];
+      return `
+        <p class="flex items-center justify-between text-sm py-1">
+          <span>${escapeHtml(name)}</span>
+          <span class="font-medium text-brand-navy">${escapeHtml(project)}${isOverride ? ' <span class="text-xs font-normal text-brand-slate">(exceção)</span>' : ""}</span>
+        </p>`;
+    })
+    .join("");
+  return `
+    <div class="card">
+      <p class="text-xs font-semibold uppercase tracking-wide text-brand-mist mb-1">${escapeHtml(label)}</p>
+      <p class="text-sm text-brand-slate mb-2">${escapeHtml(formatInternPeriodRange(periodStartIso))}</p>
+      ${rows}
+    </div>
+  `;
+}
+
 async function renderInternsList() {
   const list = document.getElementById("interns-list");
+  const summaryEl = document.getElementById("interns-rotation-summary");
 
+  const currentPeriodStart = defaultInternRotationStartIso();
+  const nextPeriodStart = addDaysISO(currentPeriodStart, 14);
+
+  // Só busca a quinzena atual em diante: o histórico de quinzenas passadas
+  // não é mais mostrado nesta tela (o núcleo de cada uma, passado, presente
+  // ou futuro, já pode ser recalculado a qualquer momento pela fórmula
+  // acima, então não há necessidade de manter a rolagem de quem esteve onde).
   const { data: interns, error } = await sb
     .from("intern_assignments")
     .select("*")
-    .order("week_start", { ascending: false })
+    .gte("week_start", currentPeriodStart)
+    .order("week_start", { ascending: true })
     .order("project")
     .order("intern_name");
 
   if (error) {
+    if (summaryEl) summaryEl.innerHTML = "";
     list.innerHTML = `<p class="p-5 text-sm text-red-500">Erro ao carregar a escala: ${escapeHtml(error.message)}</p>`;
     return;
+  }
+
+  // Uma linha da tabela para uma das três estagiárias fixas do rodízio, na
+  // quinzena atual ou na próxima, é tratada como uma EXCEÇÃO manual que
+  // substitui o valor calculado só para aquela pessoa/quinzena (ex.: uma
+  // troca combinada fora do padrão) — nunca como a fonte de verdade
+  // principal, que agora é sempre a fórmula.
+  const fixedNames = new Set(Object.keys(INTERN_ROTATION_BASE_POSITION));
+  const overridesByPeriod = new Map(); // week_start -> Map(intern_name -> project)
+  (interns || []).forEach((i) => {
+    if (!fixedNames.has(i.intern_name)) return;
+    if (!overridesByPeriod.has(i.week_start)) overridesByPeriod.set(i.week_start, new Map());
+    overridesByPeriod.get(i.week_start).set(i.intern_name, i.project);
+  });
+
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div class="grid sm:grid-cols-2 gap-4 mb-6">
+        ${renderInternRotationCard(currentPeriodStart, overridesByPeriod.get(currentPeriodStart) || new Map(), "Núcleo atual")}
+        ${renderInternRotationCard(nextPeriodStart, overridesByPeriod.get(nextPeriodStart) || new Map(), "Próxima quinzena")}
+      </div>
+    `;
   }
 
   list.innerHTML = "";
 
   if (!interns || interns.length === 0) {
-    list.innerHTML = `<p class="p-5 text-sm text-slate-400">Nenhuma alocação cadastrada ainda.</p>`;
+    list.innerHTML = `<p class="p-5 text-sm text-slate-400">Nenhuma observação ou alocação extra cadastrada para esta quinzena em diante.</p>`;
     return;
   }
 
