@@ -466,3 +466,143 @@ create policy "feedback_admin_write"
 --   where table_name = 'employee_profile_details'
 --   order by ordinal_position;
 -- ----------------------------------------------------------------------------
+
+-- ----------------------------------------------------------------------------
+-- 18. FÉRIAS — aprovação (pendente / aprovada / recusada)
+-- ----------------------------------------------------------------------------
+-- Regra do escritório: férias de MAIS DE 5 DIAS ÚTEIS precisam ser autorizadas
+-- previamente. A regra é imposta aqui no banco (gatilho), e não só na tela,
+-- porque a política "vacations_update_own" deixa cada pessoa editar a própria
+-- linha e, sem o gatilho, alguém conseguiria se autoaprovar pela API.
+
+alter table public.vacations
+  add column if not exists status text not null default 'approved',
+  add column if not exists decided_by uuid references public.profiles (id) on delete set null,
+  add column if not exists decided_at timestamptz;
+
+alter table public.vacations drop constraint if exists vacations_status_check;
+alter table public.vacations
+  add constraint vacations_status_check check (status in ('pending', 'approved', 'rejected'));
+
+-- Páscoa (mesmo algoritmo de Meeus/Jones/Butcher usado em app.js).
+create or replace function public.br_easter(y int)
+returns date
+language plpgsql
+immutable
+as $$
+declare
+  a int; b int; c int; d int; e int; f int; g int; h int; i int; k int; l int; m int;
+  mo int; dy int;
+begin
+  a := y % 19;
+  b := y / 100;
+  c := y % 100;
+  d := b / 4;
+  e := b % 4;
+  f := (b + 8) / 25;
+  g := (b - f + 1) / 3;
+  h := (19 * a + b - d - g + 15) % 30;
+  i := c / 4;
+  k := c % 4;
+  l := (32 + 2 * e + 2 * i - h - k) % 7;
+  m := (a + 11 * h + 22 * l) / 451;
+  mo := (h + l - 7 * m + 114) / 31;
+  dy := ((h + l - 7 * m + 114) % 31) + 1;
+  return make_date(y, mo, dy);
+end;
+$$;
+
+-- Feriado nacional (mesma lista de app.js: getBrazilHolidayEntries) OU data
+-- cadastrada em public.holidays (recesso, feriado municipal etc.).
+create or replace function public.br_is_holiday(d date)
+returns boolean
+language sql
+stable
+as $$
+  select
+    ((extract(month from d))::int, (extract(day from d))::int) in
+      ((1, 1), (4, 21), (5, 1), (9, 7), (10, 12), (11, 2), (11, 15), (11, 20), (12, 25))
+    or d in (
+      public.br_easter((extract(year from d))::int) - 48,
+      public.br_easter((extract(year from d))::int) - 47,
+      public.br_easter((extract(year from d))::int) - 2,
+      public.br_easter((extract(year from d))::int) + 60
+    )
+    or exists (select 1 from public.holidays h where h.date = d);
+$$;
+
+-- Dias úteis entre duas datas (inclusive): sem sábado/domingo nem feriados.
+create or replace function public.br_business_days(s date, e date)
+returns int
+language sql
+stable
+as $$
+  select count(*)::int
+  from generate_series(s::timestamp, e::timestamp, interval '1 day') as g(d)
+  where extract(isodow from g.d) < 6
+    and not public.br_is_holiday(g.d::date);
+$$;
+
+-- Gatilho: define/protege o status conforme quem está agindo.
+create or replace function public.vacations_enforce_approval()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  actor_is_admin boolean := false;
+  days int;
+begin
+  -- Alterações feitas direto no SQL Editor (sem usuário autenticado) passam livres.
+  if auth.role() is distinct from 'authenticated' then
+    return new;
+  end if;
+
+  select coalesce(p.is_admin, false) into actor_is_admin
+  from public.profiles p
+  where p.id = auth.uid();
+
+  if actor_is_admin then
+    -- Administrador decide: registra quem e quando ao aprovar/recusar.
+    if tg_op = 'UPDATE' and new.status is distinct from old.status then
+      if new.status in ('approved', 'rejected') then
+        new.decided_by := auth.uid();
+        new.decided_at := now();
+      else
+        new.decided_by := null;
+        new.decided_at := null;
+      end if;
+    end if;
+    return new;
+  end if;
+
+  -- Pessoa comum: nunca decide o próprio status.
+  if tg_op = 'INSERT'
+     or new.start_date is distinct from old.start_date
+     or new.end_date is distinct from old.end_date then
+    days := public.br_business_days(new.start_date, new.end_date);
+    new.status := case when days > 5 then 'pending' else 'approved' end;
+    new.decided_by := null;
+    new.decided_at := null;
+  else
+    new.status := old.status;
+    new.decided_by := old.decided_by;
+    new.decided_at := old.decided_at;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_vacations_enforce_approval on public.vacations;
+create trigger trg_vacations_enforce_approval
+  before insert or update on public.vacations
+  for each row execute procedure public.vacations_enforce_approval();
+
+-- Administradores podem aprovar/recusar (UPDATE) qualquer férias.
+drop policy if exists "vacations_admin_update" on public.vacations;
+create policy "vacations_admin_update"
+  on public.vacations for update
+  to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
