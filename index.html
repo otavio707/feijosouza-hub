@@ -160,6 +160,14 @@
             <span class="tile-desc">Documentos e procedimentos do escritório</span>
           </button>
 
+          <button type="button" class="tile" data-goto="estudos">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5 2.5 9.5 12 14l9.5-4.5Z"/><path d="M6 11.5V16c0 1.4 2.7 3 6 3s6-1.6 6-3v-4.5"/><path d="M21.5 9.5V15"/></svg>
+            </span>
+            <span class="tile-title">FSA Estudos</span>
+            <span id="tile-estudos-desc" class="tile-desc">Talks, debates e materiais de estudo</span>
+          </button>
+
           <button type="button" class="tile" data-goto="birthdays">
             <span class="tile-icon">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="11" rx="1"/><path d="M4 9h16"/><path d="M12 9v11"/><path d="M12 9c-1.5-4-6-4-6-1 0 1.5 2 1 6 1Z"/><path d="M12 9c1.5-4 6-4 6-1 0 1.5-2 1-6 1Z"/></svg>
@@ -391,6 +399,59 @@
         <div id="manuals-list" class="card divide-y divide-slate-100 !p-0"></div>
         <div class="flex justify-center mt-5">
           <button type="button" id="manuals-load-more" class="hidden text-sm font-medium text-brand-navy border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-50">Carregar mais</button>
+        </div>
+      </section>
+
+      <!-- PAINEL: FSA ESTUDOS -->
+      <section id="panel-estudos" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">FSA Estudos</h2>
+        <p class="text-sm text-brand-mist mb-5">FSA Talks (temas relevantes e atuais) e FSA Debates (leitura prévia, apresentação e debate). Os materiais ficam aqui e só abrem para quem está logado no Hub.</p>
+
+        <div id="study-admin-box" class="mb-6 hidden">
+          <button type="button" id="study-new-btn" class="btn-primary">Novo encontro</button>
+          <div id="study-form" class="card hidden">
+            <p id="study-form-title" class="text-sm font-medium mb-3">Novo encontro</p>
+            <div class="grid sm:grid-cols-2 gap-3">
+              <select id="study-kind" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white">
+                <option value="debate">FSA Debate</option>
+                <option value="talk">FSA Talk</option>
+              </select>
+              <input id="study-title" type="text" maxlength="200" placeholder="Tema do encontro" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <input id="study-date" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <input id="study-time" type="time" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <input id="study-location" type="text" maxlength="200" placeholder="Local (opcional)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <select id="study-presenter" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white">
+                <option value="">A definir</option>
+              </select>
+            </div>
+            <textarea id="study-description" rows="3" maxlength="5000" placeholder="Descrição: pauta, perguntas para o debate, o que preparar..." class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mt-3"></textarea>
+            <textarea id="study-summary" rows="3" maxlength="10000" placeholder="Resumo e conclusões (preencha depois do encontro)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mt-3"></textarea>
+            <p id="study-form-error" class="text-sm text-red-500 mt-2 hidden"></p>
+            <div class="flex gap-3 mt-3">
+              <button type="button" id="study-save-btn" class="btn-primary">Salvar</button>
+              <button type="button" id="study-cancel-btn" class="text-sm text-brand-slate hover:underline">Cancelar</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <button type="button" data-study-filter="all">Todos</button>
+          <button type="button" data-study-filter="debate">FSA Debates</button>
+          <button type="button" data-study-filter="talk">FSA Talks</button>
+        </div>
+        <input id="study-search" type="search" placeholder="Buscar por tema, descrição ou apresentador..." class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mb-6" />
+
+        <h3 class="font-heading text-base font-semibold text-brand-navy mb-3">Próximos encontros</h3>
+        <div id="study-upcoming" class="space-y-3 mb-8"></div>
+
+        <h3 class="font-heading text-base font-semibold text-brand-navy mb-3">Encontros anteriores</h3>
+        <div id="study-past" class="space-y-3"></div>
+        <div class="flex justify-center mt-5">
+          <button type="button" id="study-past-more" class="hidden text-sm font-medium text-brand-navy border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-50">Carregar mais</button>
         </div>
       </section>
 
