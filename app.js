@@ -2262,14 +2262,10 @@ async function renderStudies() {
 
   const today = toISODate(new Date());
 
-  // Texto do quadrado na tela inicial: o próximo encontro, qualquer formato.
+  // Card da tela inicial com o próximo encontro (qualquer formato). Fica
+  // escondido quando não há nenhum encontro agendado.
   const nextOverall = sessions.find((s) => s.session_date >= today);
-  const tileDesc = document.getElementById("tile-estudos-desc");
-  if (tileDesc) {
-    tileDesc.textContent = nextOverall
-      ? `Próximo: ${STUDY_KIND_LABELS[nextOverall.kind]} em ${formatDateBR(nextOverall.session_date).slice(0, 5)} — ${nextOverall.title}`
-      : "Talks, debates e materiais de estudo";
-  }
+  renderStudyHomeCard(nextOverall, today);
 
   // Abre por padrão o próximo encontro.
   if (!studyOpenInitialized) {
@@ -2317,6 +2313,29 @@ async function renderStudies() {
     studyPastLimit += 10;
     renderStudies();
   });
+}
+
+function renderStudyHomeCard(next, todayIso) {
+  const card = document.getElementById("summary-fsa-card");
+  if (!card) return;
+  if (!next) {
+    card.classList.add("hidden");
+    return;
+  }
+  const [ty, tm, td] = todayIso.split("-").map(Number);
+  const [y, m, d] = next.session_date.split("-").map(Number);
+  const days = Math.round((new Date(y, m - 1, d) - new Date(ty, tm - 1, td)) / 86400000);
+  const when = days === 0 ? "hoje" : days === 1 ? "amanhã" : `em ${days} dias`;
+  const time = studyFormatTime(next.session_time);
+  const presenter = studyPresenterName(next);
+
+  document.getElementById("summary-fsa-label").textContent = `FSA Estudos · ${when}`;
+  document.getElementById("summary-fsa-when").textContent =
+    studyFormatDate(next.session_date).replace(/\/\d{4}$/, "").replace(/^./, (c) => c.toUpperCase()) +
+    (time ? ` · ${time}` : "");
+  document.getElementById("summary-fsa-sub").textContent =
+    `${STUDY_KIND_LABELS[next.kind]}: ${next.title}` + (presenter ? ` — apresenta ${presenter}` : "");
+  card.classList.remove("hidden");
 }
 
 function buildStudyCard(s, materials) {
