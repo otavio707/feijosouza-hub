@@ -91,6 +91,7 @@ async function enterApp(user) {
     loadVacations(),
     loadInternSchedule(),
     loadManuals(),
+    loadStudies(),
     loadProfileTab(),
   ]);
 }
@@ -2040,6 +2041,551 @@ async function renderManualsList() {
     manualsLimit += 20;
     renderManualsList();
   });
+}
+
+// ----------------------------------------------------------------------------
+// FSA Estudos — FSA Talks (temas relevantes e atuais) e FSA Debates (leitura
+// prévia, apresentação e debate). Cada encontro tem data, tema, apresentador e
+// materiais (PDF/Word/PowerPoint enviados ao Hub ou links). Só administradores
+// cadastram os encontros; qualquer pessoa pode anexar materiais. Os arquivos
+// ficam num bucket PRIVADO ("study") e são abertos por link temporário.
+// ----------------------------------------------------------------------------
+
+const STUDY_KIND_LABELS = { talk: "FSA Talk", debate: "FSA Debate" };
+const STUDY_CATEGORY_LABELS = {
+  reading_required: "Leitura obrigatória",
+  reading_optional: "Leitura complementar",
+  presentation: "Apresentação",
+  other: "Outro material",
+};
+const STUDY_CATEGORY_ORDER = ["reading_required", "reading_optional", "presentation", "other"];
+const STUDY_MAX_FILE_BYTES = 50 * 1024 * 1024;
+
+let studyControlsReady = false;
+let studyFilter = "all";
+let studySearch = "";
+let studyPastLimit = 10;
+let studyOpenId = null;
+let studyOpenInitialized = false;
+let studyEditingId = null;
+let studyPeople = null;
+
+function studyNormalize(text) {
+  return String(text ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function studyFormatDate(iso) {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  const weekday = new Date(y, m - 1, d)
+    .toLocaleDateString("pt-BR", { weekday: "short" })
+    .replace(".", "");
+  return `${weekday}, ${formatDateBR(iso)}`;
+}
+
+function studyFormatTime(t) {
+  if (!t) return "";
+  const [h, min] = t.split(":");
+  return min && min !== "00" ? `${Number(h)}h${min}` : `${Number(h)}h`;
+}
+
+function studyPresenterName(s) {
+  return s.profiles?.full_name || s.profiles?.email || "";
+}
+
+function studySafeFileName(name) {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9.\-_]/g, "_");
+}
+
+async function loadStudies() {
+  try {
+    setupStudyControls();
+    await renderStudies();
+  } catch (e) {
+    console.error("FSA Estudos:", e);
+  }
+}
+
+function setupStudyControls() {
+  if (studyControlsReady) return;
+  studyControlsReady = true;
+
+  document.querySelectorAll("[data-study-filter]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      studyFilter = btn.dataset.studyFilter;
+      studyPastLimit = 10;
+      renderStudies();
+    });
+  });
+
+  const search = document.getElementById("study-search");
+  if (search) {
+    const debounced = debounce(() => renderStudies(), 250);
+    search.addEventListener("input", () => {
+      studySearch = search.value;
+      studyPastLimit = 10;
+      debounced();
+    });
+  }
+
+  const adminBox = document.getElementById("study-admin-box");
+  if (adminBox && currentProfile?.is_admin) {
+    adminBox.classList.remove("hidden");
+    document.getElementById("study-new-btn").addEventListener("click", () => openStudyForm(null));
+    document.getElementById("study-cancel-btn").addEventListener("click", closeStudyForm);
+    document.getElementById("study-save-btn").addEventListener("click", saveStudySession);
+  }
+}
+
+async function ensureStudyPeople() {
+  if (studyPeople) return studyPeople;
+  const { data } = await sb.from("profiles").select("id, full_name, email").order("full_name");
+  studyPeople = data || [];
+  const select = document.getElementById("study-presenter");
+  if (select) {
+    select.innerHTML =
+      `<option value="">A definir</option>` +
+      studyPeople
+        .map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.full_name || p.email)}</option>`)
+        .join("");
+  }
+  return studyPeople;
+}
+
+async function openStudyForm(session) {
+  await ensureStudyPeople();
+  studyEditingId = session ? session.id : null;
+  document.getElementById("study-form-title").textContent = session ? "Editar encontro" : "Novo encontro";
+  document.getElementById("study-kind").value = session?.kind || "debate";
+  document.getElementById("study-title").value = session?.title || "";
+  document.getElementById("study-date").value = session?.session_date || "";
+  document.getElementById("study-time").value = session?.session_time ? session.session_time.slice(0, 5) : "";
+  document.getElementById("study-location").value = session?.location || "";
+  document.getElementById("study-presenter").value = session?.presenter_id || "";
+  document.getElementById("study-description").value = session?.description || "";
+  document.getElementById("study-summary").value = session?.summary || "";
+  document.getElementById("study-form-error").classList.add("hidden");
+  document.getElementById("study-form").classList.remove("hidden");
+  document.getElementById("study-new-btn").classList.add("hidden");
+  document.getElementById("study-form").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function closeStudyForm() {
+  studyEditingId = null;
+  document.getElementById("study-form").classList.add("hidden");
+  document.getElementById("study-new-btn").classList.remove("hidden");
+}
+
+async function saveStudySession() {
+  const errEl = document.getElementById("study-form-error");
+  errEl.classList.add("hidden");
+  const title = document.getElementById("study-title").value.trim();
+  const date = document.getElementById("study-date").value;
+  if (!title || !date) {
+    errEl.textContent = "Preencha o tema e a data do encontro.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  const payload = {
+    kind: document.getElementById("study-kind").value,
+    title,
+    session_date: date,
+    session_time: document.getElementById("study-time").value || null,
+    location: document.getElementById("study-location").value.trim() || null,
+    presenter_id: document.getElementById("study-presenter").value || null,
+    description: document.getElementById("study-description").value.trim() || null,
+    summary: document.getElementById("study-summary").value.trim() || null,
+  };
+  const btn = document.getElementById("study-save-btn");
+  btn.disabled = true;
+  let result;
+  if (studyEditingId) {
+    result = await sb.from("study_sessions").update(payload).eq("id", studyEditingId).select("id").single();
+  } else {
+    result = await sb
+      .from("study_sessions")
+      .insert({ ...payload, created_by: currentUser.id })
+      .select("id")
+      .single();
+  }
+  btn.disabled = false;
+  if (result.error) {
+    errEl.textContent = "Erro ao salvar o encontro: " + result.error.message;
+    errEl.classList.remove("hidden");
+    return;
+  }
+  studyOpenId = result.data.id;
+  closeStudyForm();
+  await renderStudies();
+}
+
+async function renderStudies() {
+  const upcomingEl = document.getElementById("study-upcoming");
+  const pastEl = document.getElementById("study-past");
+  if (!upcomingEl || !pastEl) return;
+
+  const [sessionsRes, materialsRes] = await Promise.all([
+    sb
+      .from("study_sessions")
+      .select(
+        "id, kind, title, description, session_date, session_time, location, presenter_id, summary, profiles!presenter_id(full_name, email)"
+      )
+      .order("session_date", { ascending: true }),
+    sb
+      .from("study_materials")
+      .select(
+        "id, session_id, title, category, storage_path, file_name, url, created_by, created_at, profiles!created_by(full_name, email)"
+      )
+      .order("created_at", { ascending: true }),
+  ]);
+
+  if (sessionsRes.error || materialsRes.error) {
+    const msg = escapeHtml((sessionsRes.error || materialsRes.error).message);
+    upcomingEl.innerHTML = `<p class="text-sm text-red-500">Erro ao carregar os encontros: ${msg}</p>`;
+    pastEl.innerHTML = "";
+    updateLoadMoreButton("study-past-more", false);
+    return;
+  }
+
+  const sessions = sessionsRes.data || [];
+  const materialsBySession = new Map();
+  (materialsRes.data || []).forEach((m) => {
+    if (!materialsBySession.has(m.session_id)) materialsBySession.set(m.session_id, []);
+    materialsBySession.get(m.session_id).push(m);
+  });
+
+  const today = toISODate(new Date());
+
+  // Texto do quadrado na tela inicial: o próximo encontro, qualquer formato.
+  const nextOverall = sessions.find((s) => s.session_date >= today);
+  const tileDesc = document.getElementById("tile-estudos-desc");
+  if (tileDesc) {
+    tileDesc.textContent = nextOverall
+      ? `Próximo: ${STUDY_KIND_LABELS[nextOverall.kind]} em ${formatDateBR(nextOverall.session_date).slice(0, 5)} — ${nextOverall.title}`
+      : "Talks, debates e materiais de estudo";
+  }
+
+  // Abre por padrão o próximo encontro.
+  if (!studyOpenInitialized) {
+    studyOpenInitialized = true;
+    if (nextOverall) studyOpenId = nextOverall.id;
+  }
+
+  document.querySelectorAll("[data-study-filter]").forEach((btn) => {
+    const active = btn.dataset.studyFilter === studyFilter;
+    btn.className =
+      "text-sm rounded-full px-4 py-1.5 border " +
+      (active
+        ? "bg-brand-navy text-white border-brand-navy"
+        : "border-slate-200 text-brand-slate hover:bg-slate-50");
+  });
+
+  const term = studyNormalize(studySearch.trim());
+  const matches = sessions.filter((s) => {
+    if (studyFilter !== "all" && s.kind !== studyFilter) return false;
+    if (!term) return true;
+    const haystack = studyNormalize(`${s.title} ${s.description || ""} ${studyPresenterName(s)}`);
+    return haystack.includes(term);
+  });
+
+  const upcoming = matches.filter((s) => s.session_date >= today);
+  const past = matches.filter((s) => s.session_date < today).reverse();
+
+  upcomingEl.innerHTML = "";
+  if (upcoming.length === 0) {
+    upcomingEl.innerHTML = `<p class="text-sm text-slate-400">${
+      term || studyFilter !== "all" ? "Nenhum encontro futuro para esse filtro." : "Nenhum encontro agendado ainda."
+    }</p>`;
+  }
+  upcoming.forEach((s) => upcomingEl.appendChild(buildStudyCard(s, materialsBySession.get(s.id) || [])));
+
+  pastEl.innerHTML = "";
+  if (past.length === 0) {
+    pastEl.innerHTML = `<p class="text-sm text-slate-400">${
+      term || studyFilter !== "all" ? "Nenhum encontro anterior para esse filtro." : "Nenhum encontro anterior ainda."
+    }</p>`;
+  }
+  past.slice(0, studyPastLimit).forEach((s) => pastEl.appendChild(buildStudyCard(s, materialsBySession.get(s.id) || [])));
+
+  updateLoadMoreButton("study-past-more", past.length > studyPastLimit, () => {
+    studyPastLimit += 10;
+    renderStudies();
+  });
+}
+
+function buildStudyCard(s, materials) {
+  const isOpen = studyOpenId === s.id;
+  const isAdmin = !!currentProfile?.is_admin;
+  const presenter = studyPresenterName(s);
+  const kindClass =
+    s.kind === "debate" ? "bg-brand-navy text-white" : "bg-slate-100 text-brand-slate";
+  const when = [studyFormatDate(s.session_date), studyFormatTime(s.session_time), s.location]
+    .filter(Boolean)
+    .join(" · ");
+
+  const card = document.createElement("div");
+  card.className = "card !p-0";
+
+  const requiredCount = materials.filter((m) => m.category === "reading_required").length;
+  const badgeText =
+    materials.length === 0
+      ? "sem materiais"
+      : `${materials.length} ${materials.length === 1 ? "material" : "materiais"}${
+          requiredCount ? ` · ${requiredCount} de leitura obrigatória` : ""
+        }`;
+
+  card.innerHTML = `
+    <button type="button" data-toggle class="w-full text-left p-4 flex items-start justify-between gap-4">
+      <div class="min-w-0">
+        <span class="inline-block text-xs font-medium rounded-full px-2.5 py-0.5 ${kindClass}">${escapeHtml(STUDY_KIND_LABELS[s.kind] || s.kind)}</span>
+        <p class="font-medium text-brand-navy mt-1.5">${escapeHtml(s.title)}</p>
+        <p class="text-sm text-brand-slate mt-0.5">${escapeHtml(when)}</p>
+        <p class="text-sm text-brand-mist mt-0.5">${
+          presenter ? `Apresenta: ${escapeHtml(presenter)}` : "Apresentador a definir"
+        } · ${escapeHtml(badgeText)}</p>
+      </div>
+      <span class="text-brand-mist text-sm shrink-0">${isOpen ? "Fechar ▴" : "Abrir ▾"}</span>
+    </button>
+    <div data-details class="${isOpen ? "" : "hidden"} border-t border-slate-100 p-4 space-y-4"></div>
+  `;
+
+  card.querySelector("[data-toggle]").addEventListener("click", () => {
+    studyOpenId = isOpen ? null : s.id;
+    renderStudies();
+  });
+
+  if (!isOpen) return card;
+
+  const details = card.querySelector("[data-details]");
+
+  if (s.description) {
+    const p = document.createElement("p");
+    p.className = "text-sm text-brand-slate";
+    p.style.whiteSpace = "pre-line";
+    p.textContent = s.description;
+    details.appendChild(p);
+  }
+
+  if (s.summary) {
+    const box = document.createElement("div");
+    box.className = "rounded-lg bg-slate-50 p-3";
+    const label = document.createElement("p");
+    label.className = "text-xs font-medium text-brand-mist mb-1";
+    label.textContent = "Resumo e conclusões do encontro";
+    const text = document.createElement("p");
+    text.className = "text-sm text-brand-slate";
+    text.style.whiteSpace = "pre-line";
+    text.textContent = s.summary;
+    box.appendChild(label);
+    box.appendChild(text);
+    details.appendChild(box);
+  }
+
+  // Materiais, agrupados por categoria (leitura obrigatória primeiro).
+  const materialsBox = document.createElement("div");
+  const heading = document.createElement("p");
+  heading.className = "text-sm font-medium mb-2";
+  heading.textContent = "Materiais";
+  materialsBox.appendChild(heading);
+
+  if (materials.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "text-sm text-slate-400";
+    empty.textContent = "Nenhum material anexado ainda.";
+    materialsBox.appendChild(empty);
+  }
+
+  STUDY_CATEGORY_ORDER.forEach((cat) => {
+    const group = materials.filter((m) => m.category === cat);
+    if (group.length === 0) return;
+    const gTitle = document.createElement("p");
+    gTitle.className =
+      "text-xs font-medium mt-3 mb-1 " + (cat === "reading_required" ? "text-amber-600" : "text-brand-mist");
+    gTitle.textContent = STUDY_CATEGORY_LABELS[cat];
+    materialsBox.appendChild(gTitle);
+
+    group.forEach((m) => {
+      const row = document.createElement("div");
+      row.className = "flex items-center justify-between gap-3 py-1";
+      const canRemove = isAdmin || m.created_by === currentUser.id;
+      const uploader = m.profiles?.full_name || m.profiles?.email || "";
+      row.innerHTML = `
+        <div class="min-w-0">
+          <button type="button" data-open class="text-sm text-brand-navy hover:underline text-left">${escapeHtml(m.title)}</button>
+          <span class="text-xs text-brand-mist ml-1">${m.storage_path ? "arquivo" : "link"}${
+            uploader ? ` · enviado por ${escapeHtml(uploader)}` : ""
+          }</span>
+        </div>
+        ${canRemove ? `<button type="button" data-remove class="text-xs text-red-500 hover:underline shrink-0">Remover</button>` : ""}
+      `;
+      row.querySelector("[data-open]").addEventListener("click", () => openStudyMaterial(m));
+      const removeBtn = row.querySelector("[data-remove]");
+      if (removeBtn) {
+        removeBtn.addEventListener("click", async () => {
+          if (m.storage_path) {
+            const { error: storageError } = await sb.storage.from("study").remove([m.storage_path]);
+            if (storageError) {
+              alert("Erro ao remover o arquivo: " + storageError.message);
+              return;
+            }
+          }
+          const { error } = await sb.from("study_materials").delete().eq("id", m.id);
+          if (error) {
+            alert("Erro ao remover o material: " + error.message);
+            return;
+          }
+          await renderStudies();
+        });
+      }
+      materialsBox.appendChild(row);
+    });
+  });
+  details.appendChild(materialsBox);
+
+  // Anexar material (qualquer pessoa).
+  const addBox = document.createElement("div");
+  addBox.className = "rounded-lg border border-slate-200 p-3";
+  addBox.innerHTML = `
+    <p class="text-sm font-medium mb-2">Anexar material</p>
+    <div class="grid sm:grid-cols-2 gap-3">
+      <input data-m-title type="text" maxlength="200" placeholder="Título (opcional se enviar arquivo)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+      <select data-m-category class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white">
+        ${STUDY_CATEGORY_ORDER.map(
+          (c) => `<option value="${c}">${escapeHtml(STUDY_CATEGORY_LABELS[c])}</option>`
+        ).join("")}
+      </select>
+      <input data-m-file type="file" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white file:mr-3 file:py-1 file:px-3 file:rounded-full file:border-0 file:bg-brand-navy file:text-white file:text-xs file:cursor-pointer" />
+      <input data-m-url type="url" placeholder="ou cole um link (https://...)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+    </div>
+    <p class="text-xs text-brand-mist mt-2">Arquivo de até 50 MB (PDF, Word, PowerPoint ou Excel), visível somente para quem está logado no Hub. Envie arquivo ou link.</p>
+    <p data-m-error class="text-sm text-red-500 mt-2 hidden"></p>
+    <button type="button" data-m-add class="mt-3 btn-primary">Anexar</button>
+  `;
+  addBox.querySelector("[data-m-add]").addEventListener("click", () => addStudyMaterial(s, addBox));
+  details.appendChild(addBox);
+
+  if (isAdmin) {
+    const actions = document.createElement("div");
+    actions.className = "flex gap-4 pt-1";
+    actions.innerHTML = `
+      <button type="button" data-edit class="text-sm text-brand-slate hover:underline">Editar encontro</button>
+      <button type="button" data-delete class="text-sm text-red-500 hover:underline">Remover encontro</button>
+    `;
+    actions.querySelector("[data-edit]").addEventListener("click", () => openStudyForm(s));
+    actions.querySelector("[data-delete]").addEventListener("click", async () => {
+      const msg =
+        materials.length > 0
+          ? `Remover este encontro e os ${materials.length} materiais anexados? Isso não pode ser desfeito.`
+          : "Remover este encontro? Isso não pode ser desfeito.";
+      if (!window.confirm(msg)) return;
+      const paths = materials.map((m) => m.storage_path).filter(Boolean);
+      if (paths.length > 0) {
+        const { error: storageError } = await sb.storage.from("study").remove(paths);
+        if (storageError) {
+          alert("Erro ao remover os arquivos: " + storageError.message);
+          return;
+        }
+      }
+      const { error } = await sb.from("study_sessions").delete().eq("id", s.id);
+      if (error) {
+        alert("Erro ao remover o encontro: " + error.message);
+        return;
+      }
+      if (studyOpenId === s.id) studyOpenId = null;
+      await renderStudies();
+    });
+    details.appendChild(actions);
+  }
+
+  return card;
+}
+
+async function openStudyMaterial(m) {
+  if (!m.storage_path) {
+    if (m.url && /^https?:\/\//i.test(m.url)) window.open(m.url, "_blank", "noopener");
+    return;
+  }
+  // Abre a aba antes do await, para o navegador não bloquear o pop-up.
+  const newTab = window.open("", "_blank");
+  if (newTab) {
+    try {
+      newTab.opener = null;
+    } catch (e) {}
+  }
+  const { data, error } = await sb.storage.from("study").createSignedUrl(m.storage_path, 300);
+  if (error || !data?.signedUrl) {
+    if (newTab) newTab.close();
+    alert("Não foi possível abrir o arquivo agora. Tente novamente.");
+    return;
+  }
+  if (newTab) newTab.location.href = data.signedUrl;
+}
+
+async function addStudyMaterial(session, box) {
+  const errEl = box.querySelector("[data-m-error]");
+  errEl.classList.add("hidden");
+  const showError = (text) => {
+    errEl.textContent = text;
+    errEl.classList.remove("hidden");
+  };
+
+  let title = box.querySelector("[data-m-title]").value.trim();
+  const category = box.querySelector("[data-m-category]").value;
+  const fileInput = box.querySelector("[data-m-file]");
+  const file = fileInput.files[0];
+  const url = box.querySelector("[data-m-url]").value.trim();
+
+  if (!file && !url) return showError("Escolha um arquivo ou cole um link.");
+  if (file && url) return showError("Envie só o arquivo ou só o link, não os dois.");
+  if (url && !/^https?:\/\//i.test(url)) return showError("O link precisa começar com http:// ou https://.");
+  if (file && file.size > STUDY_MAX_FILE_BYTES) return showError("Arquivo maior que 50 MB. Envie um arquivo menor.");
+  if (!title && file) title = file.name.replace(/\.[^.]+$/, "");
+  if (!title) return showError("Preencha o título do link.");
+
+  const btn = box.querySelector("[data-m-add]");
+  btn.disabled = true;
+  btn.textContent = "Enviando...";
+  const restore = () => {
+    btn.disabled = false;
+    btn.textContent = "Anexar";
+  };
+
+  let storagePath = null;
+  if (file) {
+    storagePath = `${currentUser.id}/${crypto.randomUUID()}-${studySafeFileName(file.name)}`;
+    const { error: uploadError } = await sb.storage.from("study").upload(storagePath, file);
+    if (uploadError) {
+      showError("Erro ao enviar o arquivo: " + uploadError.message);
+      restore();
+      return;
+    }
+  }
+
+  const { error: insertError } = await sb.from("study_materials").insert({
+    session_id: session.id,
+    title,
+    category,
+    storage_path: storagePath,
+    file_name: file ? file.name : null,
+    url: file ? null : url,
+    created_by: currentUser.id,
+  });
+
+  if (insertError) {
+    if (storagePath) await sb.storage.from("study").remove([storagePath]);
+    showError("Erro ao salvar o material: " + insertError.message);
+    restore();
+    return;
+  }
+
+  studyOpenId = session.id;
+  await renderStudies();
 }
 
 // ----------------------------------------------------------------------------
