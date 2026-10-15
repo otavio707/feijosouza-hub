@@ -90,6 +90,11 @@
         <h2 class="font-heading text-2xl font-semibold text-brand-navy mb-1">Bem-vindo(a) de volta!</h2>
         <p class="text-brand-slate mb-6">Aqui está um resumo do escritório hoje.</p>
 
+        <div id="pending-vacations-alert" class="hidden mb-6 flex items-center justify-between gap-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <p id="pending-vacations-alert-text" class="text-sm text-amber-800"></p>
+          <button type="button" data-goto="ferias" class="text-sm font-medium text-amber-800 underline shrink-0">Ver pedidos</button>
+        </div>
+
         <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <div class="stat-card">
             <p class="stat-label" id="summary-date-label">Hoje</p>
@@ -256,6 +261,9 @@
         </button>
         <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Férias</h2>
 
+        <div id="vacation-pending-banner" class="hidden mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"></div>
+        <div id="admin-vacation-balances" class="card mb-6 hidden"></div>
+
         <div class="card mb-6">
           <button type="button" id="btn-toggle-vacation-rules" class="flex items-center justify-between w-full text-left">
             <p class="text-sm font-medium">Regras de férias</p>
@@ -266,7 +274,8 @@
               <li>Cada pessoa tem direito a <strong>22 dias úteis</strong> de férias ao longo do ano (o saldo remanescente é calculado automaticamente aqui no hub, ou pode aparecer com um valor definido manualmente pela administração).</li>
               <li>Peça as férias com <strong>pelo menos uma semana de antecedência</strong>.</li>
               <li><strong>Metade da equipe</strong> precisa estar disponível no período — combine com o time antes de confirmar.</li>
-              <li>Férias de <strong>mais de 5 dias úteis</strong> precisam ser <strong>autorizadas previamente</strong>.</li>
+              <li>Férias de <strong>mais de 5 dias úteis</strong> precisam ser <strong>autorizadas previamente</strong>: o pedido fica <strong>pendente de aprovação</strong> no Hub até um administrador aprovar.</li>
+              <li>O saldo é contado <strong>por ano</strong>: cada dia de férias sai do saldo do ano em que ele cai. Para quem já tem mais de 1 ano de casa, os dias não usados em um ano <strong>vencem em 31/12</strong>.</li>
               <li>Não há indenização de férias: o saldo não vira dinheiro, então é importante sempre tirar os dias e descansar.</li>
               <li>Período aquisitivo de <strong>6 meses</strong> de escritório: antes disso ainda não há saldo; ao completar 6 meses, a pessoa passa a ter direito aos dias proporcionais remanescentes daquele ano.</li>
               <li>Recesso de final de ano (24/12, 25/12, 31/12 e 01/01 — a avaliar anualmente): é um recesso coletivo do escritório e <strong>não é descontado</strong> do saldo individual de férias de cada pessoa.</li>
@@ -289,6 +298,7 @@
           </div>
           <p id="vacation-days-preview" class="text-sm text-brand-slate mt-3"></p>
           <p id="vacation-error" class="text-sm text-red-500 mt-2 hidden"></p>
+          <p id="vacation-info" class="text-sm text-amber-600 mt-2 hidden"></p>
         </div>
 
         <div id="vacations-list" class="card divide-y divide-slate-100 !p-0 mb-6"></div>
