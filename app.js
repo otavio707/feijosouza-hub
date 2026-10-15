@@ -449,54 +449,110 @@ async function loadHolidays() {
 // - A partir do 1º de janeiro em que a pessoa já tem mais de 1 ano de casa,
 //   o saldo é zerado e resetado para 22 dias úteis todo santo 1º de janeiro
 //   (independentemente do saldo anterior).
-// - Dias de férias já tirados (registrados em public.vacations) são
-//   descontados do saldo a partir do ponto de início da contagem corrente.
+// - Cada dia útil de férias é descontado do ANO CIVIL em que cai: férias de
+//   fevereiro/2027 saem do saldo de 2027, nunca do de 2026. Férias que
+//   atravessam a virada do ano são divididas entre os dois anos.
+// - Férias recusadas não contam. Férias pendentes de aprovação contam como
+//   "reservadas" (descontam do saldo, mas aparecem separadas).
+// - Os dias não usados de um ano vencem em 31/12 para quem, na virada, já
+//   tem mais de 1 ano de casa (ver "resets" em vacationLedger).
 const VACATION_ANNUAL_DAYS = 22;
 const VACATION_MONTHLY_RATE = VACATION_ANNUAL_DAYS / 12;
 const VACATION_VESTING_MONTHS = 6;
 const VACATION_FULL_YEAR_MONTHS = 12;
 
-// hireDateIso: data de admissão (ISO). vacations: array de { start_date, end_date }
-// (já tiradas/registradas). todayIso: data de referência (ISO), normalmente hoje.
-// Retorna o saldo em dias úteis (número, arredondado a 1 casa decimal), ou
-// null se não for possível calcular (sem data de admissão).
+// Livro-caixa de férias: uma linha por ano civil, do ano em que a pessoa
+// completa o período aquisitivo até o último ano relevante (o próximo ano ou
+// o último ano com férias cadastradas). hireDateIso: data de admissão (ISO).
+// vacations: array de { start_date, end_date, status }. Retorna null se não
+// houver data de admissão. Cada linha: { year, entitlement, carryIn,
+// approved, pending, available, remaining, expiresDec31 }.
+function vacationLedger(hireDateIso, vacations, todayIso) {
+  if (!hireDateIso) return null;
+  const today = todayIso || toISODate(new Date());
+  const vestingIso = addMonthsISO(hireDateIso, VACATION_VESTING_MONTHS);
+  const oneYearIso = addMonthsISO(hireDateIso, VACATION_FULL_YEAR_MONTHS);
+  const vestingYear = Number(vestingIso.split("-")[0]);
+  const counted = (vacations || []).filter((v) => v.status !== "rejected");
+
+  let lastYear = Number(today.split("-")[0]) + 1;
+  counted.forEach((v) => {
+    lastYear = Math.max(lastYear, Number(v.end_date.split("-")[0]));
+  });
+
+  const rows = [];
+  let carry = 0;
+  for (let y = vestingYear; y <= lastYear; y++) {
+    const jan1 = `${y}-01-01`;
+    const dec31 = `${y}-12-31`;
+    // Primeiro ano: meses restantes do ano do vesting (incluindo o mês do
+    // vesting) × 22/12, arredondado para cima. Depois: 22 por ano.
+    const entitlement =
+      y === vestingYear
+        ? Math.ceil((monthDiffISO(vestingIso, dec31) + 1) * VACATION_MONTHLY_RATE)
+        : VACATION_ANNUAL_DAYS;
+    // "resets": a partir do 1º de janeiro em que a pessoa já tem 1 ano de
+    // casa, o saldo anterior é zerado (não acumula). Antes disso, acumula.
+    const resets = y > vestingYear && jan1 >= oneYearIso;
+    const carryIn = y > vestingYear && !resets ? carry : 0;
+    const from = y === vestingYear ? vestingIso : jan1;
+
+    let approved = 0;
+    let pending = 0;
+    counted.forEach((v) => {
+      const s = v.start_date > from ? v.start_date : from;
+      const e = v.end_date < dec31 ? v.end_date : dec31;
+      if (e < s) return;
+      const days = countBusinessDays(s, e);
+      if (v.status === "pending") pending += days;
+      else approved += days;
+    });
+
+    const available = entitlement + carryIn;
+    const remaining = available - approved - pending;
+    carry = remaining;
+    rows.push({
+      year: y,
+      entitlement,
+      carryIn,
+      approved,
+      pending,
+      available,
+      remaining,
+      expiresDec31: `${y + 1}-01-01` >= oneYearIso,
+    });
+  }
+  return rows;
+}
+
+// Saldo (em dias úteis) do ANO CORRENTE, ou null se não for possível
+// calcular (sem data de admissão).
 function calcVacationBalance(hireDateIso, vacations, todayIso) {
   if (!hireDateIso) return null;
   const today = todayIso || toISODate(new Date());
+  if (today < addMonthsISO(hireDateIso, VACATION_VESTING_MONTHS)) return 0; // ainda no período aquisitivo
+  const year = Number(today.split("-")[0]);
+  const row = vacationLedger(hireDateIso, vacations, today).find((r) => r.year === year);
+  return row ? row.remaining : 0;
+}
 
-  const vestingDateIso = addMonthsISO(hireDateIso, VACATION_VESTING_MONTHS);
-  if (today < vestingDateIso) return 0; // ainda no período aquisitivo
-
-  const oneYearDateIso = addMonthsISO(hireDateIso, VACATION_FULL_YEAR_MONTHS);
-  const vestingYear = Number(vestingDateIso.split("-")[0]);
-
-  // Primeiro trecho (parcial): meses restantes do ano do vesting (incluindo
-  // o próprio mês do vesting) × 22/12, arredondado para cima — não faz
-  // sentido fração de dia de férias.
-  const endOfVestingYear = `${vestingYear}-12-31`;
-  let balance = Math.ceil((monthDiffISO(vestingDateIso, endOfVestingYear) + 1) * VACATION_MONTHLY_RATE);
-  let startPointIso = vestingDateIso;
-
-  const todayYear = Number(today.split("-")[0]);
-  for (let y = vestingYear + 1; y <= todayYear; y++) {
-    const jan1 = `${y}-01-01`;
-    const hasFullYearByJan1 = jan1 >= oneYearDateIso;
-    if (hasFullYearByJan1) {
-      balance = VACATION_ANNUAL_DAYS; // zera tudo em 31/12, reseta 22 em 01/01
-      startPointIso = jan1;
-    } else {
-      balance += VACATION_ANNUAL_DAYS; // ainda no 1º ano: acumula/carrega
-    }
-  }
-
-  const usedDays = (vacations || [])
-    .filter((v) => v.end_date >= startPointIso)
-    .reduce((sum, v) => {
-      const start = v.start_date > startPointIso ? v.start_date : startPointIso;
-      return sum + countBusinessDays(start, v.end_date);
-    }, 0);
-
-  return balance - usedDays;
+// Resumo por ano para exibir na tela (ano corrente e o seguinte), por exemplo:
+// "2026: 16 dias restantes (vencem em 31/12) · 2027: 22 dias disponíveis".
+function describeVacationLedger(ledger, todayIso) {
+  if (!ledger) return "";
+  const year = Number((todayIso || toISODate(new Date())).split("-")[0]);
+  return ledger
+    .filter((r) => r.year === year || r.year === year + 1)
+    .map((r) => {
+      const label = r.year === year ? "restantes" : "disponíveis";
+      let text = `${r.year}: ${formatVacationBalance(r.remaining)} ${label}`;
+      const notes = [];
+      if (r.year === year && r.expiresDec31 && r.remaining > 0) notes.push("vencem em 31/12");
+      if (r.pending > 0) notes.push(`inclui ${formatBusinessDays(r.pending)} pendente(s) de aprovação`);
+      if (notes.length) text += ` (${notes.join("; ")})`;
+      return text;
+    })
+    .join(" · ");
 }
 
 // ----------------------------------------------------------------------------
@@ -519,7 +575,8 @@ async function loadDashboardSummary() {
       // que ainda não tenha terminado, o mais próximo de começar primeiro.
       sb
         .from("vacations")
-        .select("user_id, start_date, end_date, profiles(full_name, email)")
+        .select("user_id, start_date, end_date, status, profiles(full_name, email)")
+        .neq("status", "rejected")
         .gte("end_date", todayISO)
         .order("start_date", { ascending: true })
         .limit(1),
@@ -576,12 +633,15 @@ async function loadDashboardSummary() {
     const name = nextVacation.profiles?.full_name || nextVacation.profiles?.email || "—";
     const period = `De ${formatDateBR(nextVacation.start_date)} a ${formatDateBR(nextVacation.end_date)}`;
     document.getElementById("summary-vacation-name").textContent = name;
+    const pendingNote = nextVacation.status === "pending" ? " (pendente de aprovação)" : "";
     document.getElementById("summary-vacation-sub").textContent =
-      nextVacation.start_date <= todayISO ? `${period} (em curso)` : period;
+      (nextVacation.start_date <= todayISO ? `${period} (em curso)` : period) + pendingNote;
   } else {
     document.getElementById("summary-vacation-name").textContent = "—";
     document.getElementById("summary-vacation-sub").textContent = "Nenhuma férias agendada";
   }
+
+  renderPendingVacationsAlert();
 }
 
 // ----------------------------------------------------------------------------
@@ -1109,7 +1169,10 @@ async function loadVacations() {
       previewEl.textContent = "";
       return;
     }
-    previewEl.textContent = `${formatBusinessDays(countBusinessDays(start, end))} nesse período.`;
+    const businessDays = countBusinessDays(start, end);
+    previewEl.textContent =
+      `${formatBusinessDays(businessDays)} nesse período.` +
+      (businessDays > 5 ? " Acima de 5 dias úteis: o pedido ficará pendente de aprovação." : "");
   };
   startInput.oninput = updatePreview;
   endInput.oninput = updatePreview;
@@ -1132,14 +1195,27 @@ async function loadVacations() {
       return;
     }
 
-    const { error } = await sb
+    const { data: created, error } = await sb
       .from("vacations")
-      .insert({ user_id: currentUser.id, start_date: start, end_date: end });
+      .insert({ user_id: currentUser.id, start_date: start, end_date: end })
+      .select("status")
+      .single();
 
     if (error) {
       errorEl.textContent = "Erro ao salvar: " + error.message;
       errorEl.classList.remove("hidden");
       return;
+    }
+
+    const infoEl = document.getElementById("vacation-info");
+    if (infoEl) {
+      if (created?.status === "pending") {
+        infoEl.textContent =
+          "Pedido registrado, mas fica PENDENTE DE APROVAÇÃO porque passa de 5 dias úteis. A administração vai ver o pedido no Hub.";
+        infoEl.classList.remove("hidden");
+      } else {
+        infoEl.classList.add("hidden");
+      }
     }
 
     startInput.value = "";
@@ -1153,10 +1229,11 @@ async function loadVacations() {
 
 async function renderVacationsList() {
   const list = document.getElementById("vacations-list");
+  renderVacationBalancesPanel();
 
   const { data: vacations, error } = await sb
     .from("vacations")
-    .select("id, user_id, start_date, end_date, profiles(full_name, email)")
+    .select("id, user_id, start_date, end_date, status, profiles(full_name, email)")
     .order("start_date");
 
   if (error) {
@@ -1164,6 +1241,7 @@ async function renderVacationsList() {
     return;
   }
 
+  renderVacationPendingBanner(vacations || []);
   list.innerHTML = "";
 
   if (!vacations || vacations.length === 0) {
@@ -1179,16 +1257,32 @@ async function renderVacationsList() {
     row.innerHTML = `
       <div class="flex items-center justify-between gap-4" data-view>
         <div>
-          <p class="font-medium">${escapeHtml(name)}</p>
+          <p class="font-medium">${escapeHtml(name)}${vacationStatusBadgeHtml(v.status)}</p>
           <p class="text-sm text-slate-500">${formatDateBR(v.start_date)} a ${formatDateBR(v.end_date)} · ${formatBusinessDays(days)}</p>
         </div>
-        ${v.user_id === currentUser.id ? `
-          <div class="flex gap-3 shrink-0">
+        <div class="flex gap-3 shrink-0">
+          ${currentProfile?.is_admin && v.status === "pending" ? `
+            <button type="button" class="text-sm font-medium text-green-700 hover:underline" data-approve>Aprovar</button>
+            <button type="button" class="text-sm text-red-500 hover:underline" data-reject>Recusar</button>` : ""}
+          ${v.user_id === currentUser.id ? `
             <button type="button" class="text-sm text-brand-slate hover:underline" data-edit>Editar</button>
-            <button type="button" class="text-sm text-red-500 hover:underline" data-remove>Remover</button>
-          </div>` : ""}
+            <button type="button" class="text-sm text-red-500 hover:underline" data-remove>Remover</button>` : ""}
+        </div>
       </div>
     `;
+
+    const decideVacation = async (newStatus) => {
+      const { error } = await sb.from("vacations").update({ status: newStatus }).eq("id", v.id);
+      if (error) {
+        alert("Erro ao registrar a decisão: " + error.message);
+        return;
+      }
+      await Promise.all([renderVacationsList(), loadDashboardSummary()]);
+    };
+    const approveBtn = row.querySelector("[data-approve]");
+    if (approveBtn) approveBtn.addEventListener("click", () => decideVacation("approved"));
+    const rejectBtn = row.querySelector("[data-reject]");
+    if (rejectBtn) rejectBtn.addEventListener("click", () => decideVacation("rejected"));
 
     const removeBtn = row.querySelector("[data-remove]");
     if (removeBtn) {
@@ -1269,6 +1363,155 @@ async function renderVacationsList() {
 
     list.appendChild(row);
   });
+}
+
+// Selo de status ao lado do nome na lista de férias (texto fixo, sem dados
+// digitados por usuários).
+function vacationStatusBadgeHtml(status) {
+  if (status === "pending") return ' <span class="text-xs font-normal text-amber-600">(pendente de aprovação)</span>';
+  if (status === "rejected") return ' <span class="text-xs font-normal text-red-500">(recusada)</span>';
+  return "";
+}
+
+// Faixa no topo da aba Férias (somente administradores) quando há pedidos
+// pendentes. Calculada na hora a partir do que está no banco — não depende de
+// nenhuma automação externa para aparecer.
+function renderVacationPendingBanner(vacations) {
+  const el = document.getElementById("vacation-pending-banner");
+  if (!el) return;
+  const pending = (vacations || []).filter((v) => v.status === "pending");
+  if (!currentProfile?.is_admin || pending.length === 0) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    return;
+  }
+  el.textContent =
+    pending.length === 1
+      ? "1 pedido de férias aguardando aprovação (veja a lista abaixo)."
+      : `${pending.length} pedidos de férias aguardando aprovação (veja a lista abaixo).`;
+  el.classList.remove("hidden");
+}
+
+// Aviso na tela inicial (somente administradores) com o número de pedidos
+// de férias pendentes.
+async function renderPendingVacationsAlert() {
+  const el = document.getElementById("pending-vacations-alert");
+  if (!el) return;
+  if (!currentProfile?.is_admin) {
+    el.classList.add("hidden");
+    return;
+  }
+  const { count } = await sb
+    .from("vacations")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "pending");
+  if (!count) {
+    el.classList.add("hidden");
+    return;
+  }
+  document.getElementById("pending-vacations-alert-text").textContent =
+    count === 1
+      ? "1 pedido de férias aguardando a sua aprovação"
+      : `${count} pedidos de férias aguardando a sua aprovação`;
+  el.classList.remove("hidden");
+}
+
+// Painel "Saldo de férias da equipe" (somente administradores): uma linha por
+// pessoa com o saldo do ano corrente (o valor que a pessoa vê em Meu perfil,
+// indicando se é manual ou automático), o saldo do ano seguinte e os dias
+// pendentes de aprovação. A RLS já limita employee_profile_details a admins.
+async function renderVacationBalancesPanel() {
+  const box = document.getElementById("admin-vacation-balances");
+  if (!box) return;
+  if (!currentProfile?.is_admin) {
+    box.classList.add("hidden");
+    box.innerHTML = "";
+    return;
+  }
+  box.classList.remove("hidden");
+
+  const [{ data: profiles, error: profilesError }, { data: details }, { data: vacs }] = await Promise.all([
+    sb.from("profiles").select("id, full_name, email").order("full_name"),
+    sb.from("employee_profile_details").select("user_id, hire_date, vacation_balance_days"),
+    sb.from("vacations").select("user_id, start_date, end_date, status"),
+  ]);
+  if (profilesError) {
+    box.innerHTML = `<p class="text-sm text-red-500">Erro ao carregar os saldos: ${escapeHtml(profilesError.message)}</p>`;
+    return;
+  }
+
+  const todayIso = toISODate(new Date());
+  const year = Number(todayIso.split("-")[0]);
+  const detailsById = new Map((details || []).map((d) => [d.user_id, d]));
+  const vacsByUser = new Map();
+  (vacs || []).forEach((v) => {
+    if (!vacsByUser.has(v.user_id)) vacsByUser.set(v.user_id, []);
+    vacsByUser.get(v.user_id).push(v);
+  });
+
+  const rows = (profiles || []).map((p) => {
+    const name = escapeHtml(p.full_name || p.email);
+    const d = detailsById.get(p.id);
+    if (!d?.hire_date) {
+      return `<tr class="border-b border-slate-50"><td class="py-2 pr-4 font-medium">${name}</td><td colspan="4" class="py-2 text-brand-mist">Sem data de admissão cadastrada</td></tr>`;
+    }
+    const mine = vacsByUser.get(p.id) || [];
+    const ledger = vacationLedger(d.hire_date, mine, todayIso);
+    const auto = calcVacationBalance(d.hire_date, mine, todayIso);
+    const hasManual = d.vacation_balance_days !== null && d.vacation_balance_days !== undefined;
+    const current = hasManual ? Number(d.vacation_balance_days) : auto;
+    const curRow = ledger.find((r) => r.year === year);
+    const nextRow = ledger.find((r) => r.year === year + 1);
+    const vestingIso = addMonthsISO(d.hire_date, VACATION_VESTING_MONTHS);
+    const inAcquisitivePeriod = todayIso < vestingIso;
+    const pendingTotal = ledger.reduce((sum, r) => sum + r.pending, 0);
+
+    let curCell = `<strong>${escapeHtml(formatVacationBalance(current))}</strong>`;
+    if (inAcquisitivePeriod) {
+      curCell += ` <span class="text-xs text-brand-mist">(período aquisitivo até ${escapeHtml(formatDateBR(vestingIso))})</span>`;
+    }
+    curCell += hasManual
+      ? ` <span class="text-xs text-amber-600">manual · automático: ${escapeHtml(formatVacationBalance(auto))}</span>`
+      : ` <span class="text-xs text-brand-mist">automático</span>`;
+    if (!inAcquisitivePeriod && curRow?.expiresDec31 && current > 0) {
+      curCell += ` <span class="text-xs text-red-500">vence em 31/12</span>`;
+    }
+
+    const detail = ledger
+      .filter((r) => r.year >= year)
+      .map(
+        (r) =>
+          `${r.year}: direito ${r.entitlement}${r.carryIn ? ` + ${r.carryIn} acumulados` : ""} · usados/agendados ${r.approved} · pendentes ${r.pending} · restam ${r.remaining}`
+      )
+      .join("\n");
+
+    return `<tr class="border-b border-slate-50" title="${escapeHtml(detail)}">
+      <td class="py-2 pr-4 font-medium">${name}</td>
+      <td class="py-2 pr-4">${escapeHtml(formatDateBR(d.hire_date))}</td>
+      <td class="py-2 pr-4">${curCell}</td>
+      <td class="py-2 pr-4">${nextRow ? escapeHtml(formatVacationBalance(nextRow.remaining)) : "—"}</td>
+      <td class="py-2">${pendingTotal > 0 ? `<span class="text-amber-600">${escapeHtml(formatBusinessDays(pendingTotal))}</span>` : "—"}</td>
+    </tr>`;
+  });
+
+  box.innerHTML = `
+    <p class="text-sm font-medium mb-1">Saldo de férias da equipe (somente administradores)</p>
+    <p class="text-xs text-brand-mist mb-3">A coluna "Saldo ${year}" é exatamente o valor que cada pessoa vê em Meu perfil. "Manual" = um administrador fixou o valor; "automático" = calculado pela data de admissão e pelas férias lançadas, ano a ano. Passe o mouse sobre a linha para ver o detalhe por ano. Dias não usados vencem em 31/12 para quem já tem mais de 1 ano de casa.</p>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm text-left">
+        <thead>
+          <tr class="text-xs text-brand-mist border-b border-slate-100">
+            <th class="py-2 pr-4 font-normal">Pessoa</th>
+            <th class="py-2 pr-4 font-normal">Admissão</th>
+            <th class="py-2 pr-4 font-normal">Saldo ${year}</th>
+            <th class="py-2 pr-4 font-normal">Saldo ${year + 1}</th>
+            <th class="py-2 font-normal">Pendentes</th>
+          </tr>
+        </thead>
+        <tbody>${rows.join("")}</tbody>
+      </table>
+    </div>
+  `;
 }
 
 // Quantas linhas mostrar de cada vez no calendário — mantém a lista enxuta;
@@ -1912,11 +2155,11 @@ function renderFeedbackList(container, entries, { withRemove = false } = {}) {
 // automaticamente a partir da data de admissão e das férias já registradas.
 // Retorna { value, isManual }.
 function resolveVacationBalance(details, vacations) {
+  const auto = calcVacationBalance(details?.hire_date, vacations, toISODate(new Date()));
   if (details?.vacation_balance_days !== null && details?.vacation_balance_days !== undefined) {
-    return { value: details.vacation_balance_days, isManual: true };
+    return { value: details.vacation_balance_days, isManual: true, auto };
   }
-  const calc = calcVacationBalance(details?.hire_date, vacations, toISODate(new Date()));
-  return { value: calc, isManual: false };
+  return { value: auto, isManual: false, auto };
 }
 
 async function loadProfileTab() {
@@ -1924,7 +2167,7 @@ async function loadProfileTab() {
   const [{ data: myDetails }, { data: myFeedback }, { data: myVacations }] = await Promise.all([
     sb.from("employee_profile_details").select("*").eq("user_id", currentUser.id).maybeSingle(),
     sb.from("feedback_entries").select("*").eq("user_id", currentUser.id).order("created_at", { ascending: false }),
-    sb.from("vacations").select("start_date, end_date").eq("user_id", currentUser.id),
+    sb.from("vacations").select("start_date, end_date, status").eq("user_id", currentUser.id),
   ]);
 
   document.getElementById("profile-hire-date").textContent = myDetails?.hire_date
@@ -1935,11 +2178,16 @@ async function loadProfileTab() {
   document.getElementById("profile-vacation-balance").textContent = formatVacationBalance(resolvedBalance.value);
   const subEl = document.getElementById("profile-vacation-balance-sub");
   if (subEl) {
-    subEl.textContent = !myDetails?.hire_date
-      ? ""
-      : resolvedBalance.isManual
-      ? "Valor definido manualmente pela administração"
-      : "Calculado automaticamente a partir da data de admissão";
+    subEl.style.whiteSpace = "pre-line";
+    if (!myDetails?.hire_date) {
+      subEl.textContent = "";
+    } else {
+      const source = resolvedBalance.isManual
+        ? `Valor definido manualmente pela administração (o cálculo automático daria ${formatVacationBalance(resolvedBalance.auto)})`
+        : "Calculado automaticamente a partir da data de admissão";
+      const breakdown = describeVacationLedger(vacationLedger(myDetails.hire_date, myVacations || [], toISODate(new Date())));
+      subEl.textContent = breakdown ? `${source}\n${breakdown}` : source;
+    }
   }
 
   renderFeedbackList(document.getElementById("profile-feedback-list"), await attachFeedbackAuthors(myFeedback || []));
@@ -1989,7 +2237,7 @@ async function loadProfileEditorFor(userId) {
   const [{ data: details }, { data: feedback }, { data: vacations }] = await Promise.all([
     sb.from("employee_profile_details").select("*").eq("user_id", userId).maybeSingle(),
     sb.from("feedback_entries").select("*").eq("user_id", userId).order("created_at", { ascending: false }),
-    sb.from("vacations").select("start_date, end_date").eq("user_id", userId),
+    sb.from("vacations").select("start_date, end_date, status").eq("user_id", userId),
   ]);
 
   document.getElementById("profile-editor-hire-date").value = details?.hire_date || "";
@@ -2002,12 +2250,31 @@ async function loadProfileEditorFor(userId) {
       if (feedbackDateEl) feedbackDateEl.value = toISODate(new Date());
 
   const editorBalanceHint = document.getElementById("profile-editor-vacation-balance-hint");
+  const editorBalanceInput = document.getElementById("profile-editor-vacation-balance");
   if (editorBalanceHint) {
-    const autoCalc = calcVacationBalance(details?.hire_date, vacations || [], toISODate(new Date()));
-    editorBalanceHint.textContent =
-      autoCalc === null
-        ? "Sem data de admissão cadastrada, não é possível calcular automaticamente."
-        : `Cálculo automático (sem override manual): ${formatVacationBalance(autoCalc)}.`;
+    const todayIso = toISODate(new Date());
+    const autoCalc = calcVacationBalance(details?.hire_date, vacations || [], todayIso);
+    const breakdown = describeVacationLedger(vacationLedger(details?.hire_date, vacations || [], todayIso));
+    const hintYear = todayIso.split("-")[0];
+    const savedManualRaw = String(details?.vacation_balance_days ?? "");
+    editorBalanceHint.style.whiteSpace = "pre-line";
+    const renderEditorHint = () => {
+      const raw = editorBalanceInput.value;
+      const hasManual = raw !== "" && !Number.isNaN(Number(raw));
+      const autoText = autoCalc === null ? "indisponível (sem data de admissão)" : formatVacationBalance(autoCalc);
+      const unsaved = raw !== savedManualRaw ? " (alteração ainda não salva)" : "";
+      let main;
+      if (hasManual) {
+        main = `VALENDO para a pessoa (saldo de ${hintYear}): ${formatVacationBalance(Number(raw))}, definido manualmente${unsaved}. O cálculo automático daria ${autoText}. Apague o campo e salve para voltar ao automático.`;
+      } else if (autoCalc === null) {
+        main = `Sem data de admissão cadastrada: não há cálculo automático. Preencha a data de admissão ou digite um saldo manual${unsaved}.`;
+      } else {
+        main = `VALENDO para a pessoa (saldo de ${hintYear}): ${autoText}, pelo cálculo automático${unsaved}. Digite um valor só se quiser fixar outro.`;
+      }
+      editorBalanceHint.textContent = breakdown ? `${main}\nPor ano: ${breakdown}` : main;
+    };
+    editorBalanceInput.oninput = renderEditorHint;
+    renderEditorHint();
   }
 
   renderFeedbackList(document.getElementById("profile-editor-feedback-list"), await attachFeedbackAuthors(feedback || []), {
@@ -2034,6 +2301,8 @@ async function loadProfileEditorFor(userId) {
       errEl.classList.remove("hidden");
       return;
     }
+    await loadProfileEditorFor(userId);
+    renderVacationBalancesPanel();
     savedMsg.classList.remove("hidden");
     setTimeout(() => savedMsg.classList.add("hidden"), 2000);
 
