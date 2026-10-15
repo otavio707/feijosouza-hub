@@ -575,7 +575,7 @@ async function loadDashboardSummary() {
       // que ainda não tenha terminado, o mais próximo de começar primeiro.
       sb
         .from("vacations")
-        .select("user_id, start_date, end_date, status, profiles(full_name, email)")
+        .select("user_id, start_date, end_date, status, profiles!user_id(full_name, email)")
         .neq("status", "rejected")
         .gte("end_date", todayISO)
         .order("start_date", { ascending: true })
@@ -1233,7 +1233,7 @@ async function renderVacationsList() {
 
   const { data: vacations, error } = await sb
     .from("vacations")
-    .select("id, user_id, start_date, end_date, status, profiles(full_name, email)")
+    .select("id, user_id, start_date, end_date, status, profiles!user_id(full_name, email)")
     .order("start_date");
 
   if (error) {
