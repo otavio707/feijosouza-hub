@@ -606,3 +606,128 @@ create policy "vacations_admin_update"
   to authenticated
   using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
   with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+-- ----------------------------------------------------------------------------
+-- 19. FSA ESTUDOS — encontros (FSA Talks / FSA Debates) e seus materiais
+-- ----------------------------------------------------------------------------
+-- Encontros: só administradores cadastram/editam/removem; todos os logados leem.
+-- Materiais: qualquer pessoa logada anexa; cada um remove o que enviou e
+-- administradores removem qualquer um. Arquivos ficam no bucket PRIVADO "study",
+-- dentro de uma pasta com o id de quem enviou, e são abertos por link temporário.
+
+create table if not exists public.study_sessions (
+  id bigint generated always as identity primary key,
+  kind text not null check (kind in ('talk', 'debate')),
+  title text not null check (char_length(title) between 1 and 200),
+  description text check (description is null or char_length(description) <= 5000),
+  session_date date not null,
+  session_time time,
+  location text check (location is null or char_length(location) <= 200),
+  presenter_id uuid references public.profiles (id) on delete set null,
+  summary text check (summary is null or char_length(summary) <= 10000),
+  created_by uuid references public.profiles (id) on delete set null default auth.uid(),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists study_sessions_date_idx on public.study_sessions (session_date);
+
+alter table public.study_sessions enable row level security;
+
+drop policy if exists "study_sessions_select_authenticated" on public.study_sessions;
+create policy "study_sessions_select_authenticated"
+  on public.study_sessions for select
+  to authenticated
+  using (true);
+
+drop policy if exists "study_sessions_admin_write" on public.study_sessions;
+create policy "study_sessions_admin_write"
+  on public.study_sessions for all
+  to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+create table if not exists public.study_materials (
+  id bigint generated always as identity primary key,
+  session_id bigint not null references public.study_sessions (id) on delete cascade,
+  title text not null check (char_length(title) between 1 and 200),
+  category text not null default 'reading_required'
+    check (category in ('reading_required', 'reading_optional', 'presentation', 'other')),
+  storage_path text,
+  file_name text,
+  url text check (url is null or url ~* '^https?://'),
+  created_by uuid references public.profiles (id) on delete set null default auth.uid(),
+  created_at timestamptz not null default now(),
+  check (storage_path is not null or url is not null)
+);
+
+create index if not exists study_materials_session_idx on public.study_materials (session_id);
+
+alter table public.study_materials enable row level security;
+
+drop policy if exists "study_materials_select_authenticated" on public.study_materials;
+create policy "study_materials_select_authenticated"
+  on public.study_materials for select
+  to authenticated
+  using (true);
+
+-- Quem anexa precisa constar como autor e só pode apontar para a própria pasta.
+drop policy if exists "study_materials_insert_own" on public.study_materials;
+create policy "study_materials_insert_own"
+  on public.study_materials for insert
+  to authenticated
+  with check (
+    created_by = auth.uid()
+    and (storage_path is null or storage_path like auth.uid()::text || '/%')
+  );
+
+drop policy if exists "study_materials_delete_own_or_admin" on public.study_materials;
+create policy "study_materials_delete_own_or_admin"
+  on public.study_materials for delete
+  to authenticated
+  using (
+    created_by = auth.uid()
+    or exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin)
+  );
+
+-- Bucket privado: até 50 MB por arquivo; só PDF, Word, PowerPoint e Excel.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'study', 'study', false, 52428800,
+  array[
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  ]
+)
+on conflict (id) do nothing;
+
+drop policy if exists "study_bucket_select_authenticated" on storage.objects;
+create policy "study_bucket_select_authenticated"
+  on storage.objects for select
+  to authenticated
+  using (bucket_id = 'study');
+
+drop policy if exists "study_bucket_insert_own_folder" on storage.objects;
+create policy "study_bucket_insert_own_folder"
+  on storage.objects for insert
+  to authenticated
+  with check (
+    bucket_id = 'study'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "study_bucket_delete_own_or_admin" on storage.objects;
+create policy "study_bucket_delete_own_or_admin"
+  on storage.objects for delete
+  to authenticated
+  using (
+    bucket_id = 'study'
+    and (
+      (storage.foldername(name))[1] = auth.uid()::text
+      or exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin)
+    )
+  );
