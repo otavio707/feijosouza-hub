@@ -731,3 +731,56 @@ create policy "study_bucket_delete_own_or_admin"
       or exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin)
     )
   );
+
+-- ----------------------------------------------------------------------------
+-- 20. PERMISSÕES EXPLÍCITAS (GRANT) PARA A DATA API DO SUPABASE
+-- ----------------------------------------------------------------------------
+-- A partir de 30/10/2026 o Supabase deixa de conceder acesso automático à
+-- Data API (supabase-js, PostgREST, GraphQL) a tabelas NOVAS do schema public.
+-- As tabelas que já existiam em produção mantêm as permissões que tinham, mas
+-- quem recriar o banco a partir deste arquivo (projeto novo, branch de
+-- preview, "supabase db reset") precisa destes GRANTs, senão a API responde
+-- "permission denied".
+--
+-- Só o papel "authenticated" (pessoas logadas no Hub) e o "service_role"
+-- precisam de acesso. O papel "anon" fica de fora de propósito: o Hub exige
+-- login, e quem decide o que cada pessoa vê continua sendo a RLS (políticas
+-- acima). O GRANT só abre a porta da API; a RLS controla linha a linha.
+--
+-- REGRA PARA O FUTURO: toda tabela nova do Hub deve trazer o seu GRANT no
+-- mesmo bloco que a cria, por exemplo:
+--   grant select, insert, update, delete on table public.nova_tabela to authenticated;
+--   grant all on table public.nova_tabela to service_role;
+
+-- OBS: a tabela public.employee_profile_details (dados do perfil: admissão,
+-- saldo de férias manual e feedbacks) não é criada neste arquivo. Em um banco
+-- novo, dê a ela os mesmos GRANTs (authenticated: select, insert, update,
+-- delete; service_role: all) no mesmo bloco que a criar.
+
+grant select, insert, update, delete on table
+  public.profiles,
+  public.feedback_entries,
+  public.homeoffice_entries,
+  public.vacations,
+  public.holidays,
+  public.office_settings,
+  public.intern_assignments,
+  public.manuals,
+  public.announcements,
+  public.study_sessions,
+  public.study_materials
+to authenticated;
+
+grant all on table
+  public.profiles,
+  public.feedback_entries,
+  public.homeoffice_entries,
+  public.vacations,
+  public.holidays,
+  public.office_settings,
+  public.intern_assignments,
+  public.manuals,
+  public.announcements,
+  public.study_sessions,
+  public.study_materials
+to service_role;
