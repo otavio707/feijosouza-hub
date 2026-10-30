@@ -806,3 +806,222 @@ revoke execute on function
 from public, anon, authenticated;
 
 -- Em bancos novos, rode esta seção DEPOIS de criar todas as funções e tabelas.
+
+
+-- ----------------------------------------------------------------------------
+-- 22. PEDIDOS INTERNOS (TI, compras, reembolso, abono de falta)
+-- ----------------------------------------------------------------------------
+-- Cada pessoa abre pedidos e vê só os PRÓPRIOS; administradores veem e tratam
+-- todos. Não há autoaprovação: só administradores têm política de UPDATE e o
+-- INSERT exige status "pending" sem decisão. Comprovantes ficam no bucket
+-- PRIVADO "requests" (só o dono e administradores).
+
+create table if not exists public.internal_requests (
+  id bigint generated always as identity primary key,
+  kind text not null check (kind in ('ti', 'compras', 'reembolso', 'abono')),
+  title text not null check (char_length(title) between 1 and 200),
+  description text check (description is null or char_length(description) <= 5000),
+  amount numeric(12, 2) check (amount is null or (amount > 0 and amount < 10000000)),
+  start_date date,
+  end_date date,
+  status text not null default 'pending'
+    check (status in ('pending', 'approved', 'rejected', 'done')),
+  decision_note text check (decision_note is null or char_length(decision_note) <= 1000),
+  attachment_path text,
+  attachment_name text check (attachment_name is null or char_length(attachment_name) <= 255),
+  user_id uuid not null default auth.uid() references public.profiles (id) on delete cascade,
+  decided_by uuid references public.profiles (id) on delete set null,
+  decided_at timestamptz,
+  created_at timestamptz not null default now(),
+  check (kind <> 'abono' or start_date is not null),
+  check (end_date is null or (start_date is not null and end_date >= start_date)),
+  check (kind <> 'reembolso' or amount is not null)
+);
+
+create index if not exists internal_requests_user_idx on public.internal_requests (user_id, created_at desc);
+create index if not exists internal_requests_status_idx on public.internal_requests (status, created_at desc);
+create index if not exists internal_requests_absence_idx
+  on public.internal_requests (kind, status, start_date) where kind = 'abono';
+
+alter table public.internal_requests enable row level security;
+
+drop policy if exists "requests_select_own_or_admin" on public.internal_requests;
+create policy "requests_select_own_or_admin"
+  on public.internal_requests for select
+  to authenticated
+  using (
+    user_id = auth.uid()
+    or exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin)
+  );
+
+drop policy if exists "requests_insert_own_pending" on public.internal_requests;
+create policy "requests_insert_own_pending"
+  on public.internal_requests for insert
+  to authenticated
+  with check (
+    user_id = auth.uid()
+    and status = 'pending'
+    and decided_by is null
+    and decided_at is null
+    and decision_note is null
+    and (attachment_path is null or attachment_path like auth.uid()::text || '/%')
+  );
+
+drop policy if exists "requests_admin_update" on public.internal_requests;
+create policy "requests_admin_update"
+  on public.internal_requests for update
+  to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+drop policy if exists "requests_delete_own_pending_or_admin" on public.internal_requests;
+create policy "requests_delete_own_pending_or_admin"
+  on public.internal_requests for delete
+  to authenticated
+  using (
+    (user_id = auth.uid() and status = 'pending')
+    or exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin)
+  );
+
+-- Carimba quem decidiu e quando sempre que o status muda.
+create or replace function public.requests_stamp_decision()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if new.status is distinct from old.status then
+    new.decided_at := now();
+    if auth.uid() is not null then
+      new.decided_by := auth.uid();
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_requests_stamp_decision on public.internal_requests;
+create trigger trg_requests_stamp_decision
+  before update on public.internal_requests
+  for each row execute function public.requests_stamp_decision();
+
+revoke execute on function public.requests_stamp_decision() from public, anon, authenticated;
+
+grant select, insert, update, delete on table public.internal_requests to authenticated;
+grant all on table public.internal_requests to service_role;
+
+-- Bucket privado de comprovantes: até 10 MB; PDF e imagens.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'requests', 'requests', false, 10485760,
+  array['application/pdf', 'image/jpeg', 'image/png', 'image/webp']
+)
+on conflict (id) do nothing;
+
+drop policy if exists "requests_bucket_select_own_or_admin" on storage.objects;
+create policy "requests_bucket_select_own_or_admin"
+  on storage.objects for select
+  to authenticated
+  using (
+    bucket_id = 'requests'
+    and (
+      (storage.foldername(name))[1] = auth.uid()::text
+      or exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin)
+    )
+  );
+
+drop policy if exists "requests_bucket_insert_own_folder" on storage.objects;
+create policy "requests_bucket_insert_own_folder"
+  on storage.objects for insert
+  to authenticated
+  with check (
+    bucket_id = 'requests'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
+
+drop policy if exists "requests_bucket_delete_own_or_admin" on storage.objects;
+create policy "requests_bucket_delete_own_or_admin"
+  on storage.objects for delete
+  to authenticated
+  using (
+    bucket_id = 'requests'
+    and (
+      (storage.foldername(name))[1] = auth.uid()::text
+      or exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin)
+    )
+  );
+
+-- ----------------------------------------------------------------------------
+-- 23. FUNÇÕES SEGURAS PARA O CALENDÁRIO E OS ANOS DE CASA
+-- ----------------------------------------------------------------------------
+-- Pedidos e ficha do funcionário são restritos (dono e administradores). Estas
+-- funções expõem a TODOS os logados só o mínimo necessário:
+--  * team_absences: quem tem abono de falta aprovado e em quais datas (sem
+--    motivo, valor ou anexo) — para o calendário da equipe;
+--  * work_anniversaries: nome, data do aniversário de casa e anos completos de
+--    quem faz no período. Isso revela o mês/dia de admissão e, somando os anos,
+--    a data de admissão de quem faz aniversário de casa naquele mês.
+
+create or replace function public.team_absences(d_from date, d_to date)
+returns table (user_id uuid, kind text, start_date date, end_date date)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select r.user_id, r.kind, r.start_date, coalesce(r.end_date, r.start_date)
+  from public.internal_requests r
+  where r.kind = 'abono'
+    and r.status in ('approved', 'done')
+    and r.start_date <= d_to
+    and coalesce(r.end_date, r.start_date) >= d_from
+$$;
+
+create or replace function public.work_anniversaries(d_from date, d_to date)
+returns table (user_id uuid, full_name text, anniversary date, years int)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    p.id,
+    coalesce(nullif(p.full_name, ''), split_part(p.email, '@', 1)),
+    a.anniv,
+    y.yr - extract(year from d.hire_date)::int
+  from public.employee_profile_details d
+  join public.profiles p on p.id = d.user_id
+  cross join lateral generate_series(extract(year from d_from)::int, extract(year from d_to)::int) as y(yr)
+  cross join lateral (
+    select make_date(
+      y.yr,
+      extract(month from d.hire_date)::int,
+      least(
+        extract(day from d.hire_date)::int,
+        extract(day from (date_trunc('month', make_date(y.yr, extract(month from d.hire_date)::int, 1))
+                          + interval '1 month - 1 day'))::int
+      )
+    ) as anniv
+  ) a
+  where d.hire_date is not null
+    and y.yr > extract(year from d.hire_date)::int
+    and a.anniv between d_from and d_to
+  order by a.anniv, 2
+$$;
+
+revoke all on function public.team_absences(date, date) from public, anon;
+revoke all on function public.work_anniversaries(date, date) from public, anon;
+grant execute on function public.team_absences(date, date) to authenticated, service_role;
+grant execute on function public.work_anniversaries(date, date) to authenticated, service_role;
+
+-- ----------------------------------------------------------------------------
+-- 24. PADRÃO PARA TABELAS NOVAS: NADA PARA O PAPEL "anon"
+-- ----------------------------------------------------------------------------
+-- O Supabase ainda concede acesso ao "anon" por padrão em tabelas criadas pelo
+-- SQL Editor. Aplicado em produção em 30/10/2026: revoga o acesso da tabela
+-- internal_requests e muda o padrão do schema public para tabelas e sequências
+-- futuras (criadas pelo mesmo papel que roda o SQL Editor).
+
+revoke all on table public.internal_requests from anon;
+alter default privileges in schema public revoke all on tables from anon;
+alter default privileges in schema public revoke all on sequences from anon;
