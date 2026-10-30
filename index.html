@@ -95,6 +95,11 @@
           <button type="button" data-goto="ferias" class="text-sm font-medium text-amber-800 underline shrink-0">Ver pedidos</button>
         </div>
 
+        <div id="pending-requests-alert" class="hidden mb-6 flex items-center justify-between gap-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <p id="pending-requests-alert-text" class="text-sm text-amber-800"></p>
+          <button type="button" data-goto="pedidos" class="text-sm font-medium text-amber-800 underline shrink-0">Ver pedidos</button>
+        </div>
+
         <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <div class="stat-card">
             <p class="stat-label" id="summary-date-label">Hoje</p>
@@ -121,6 +126,11 @@
             <p id="summary-fsa-when" class="stat-value">—</p>
             <p id="summary-fsa-sub" class="stat-sub"></p>
           </div>
+          <div id="summary-anniv-card" data-goto="birthdays" class="stat-card hidden sm:col-span-2 lg:col-span-4 cursor-pointer">
+            <p class="stat-label" id="summary-anniv-label">Anos de casa</p>
+            <p id="summary-anniv-names" class="stat-value">—</p>
+            <p id="summary-anniv-sub" class="stat-sub"></p>
+          </div>
         </div>
 
         <h3 class="font-heading text-base font-semibold text-brand-navy mb-3">O que você precisa?</h3>
@@ -131,6 +141,14 @@
             </span>
             <span class="tile-title">Home office</span>
             <span class="tile-desc">Marque seus dias e veja a escala da equipe</span>
+          </button>
+
+          <button type="button" class="tile" data-goto="equipe">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M8 14h2M14 14h2M8 17.5h2"/></svg>
+            </span>
+            <span class="tile-title">Calendário da equipe</span>
+            <span class="tile-desc">Quem está fora, em home office ou no escritório</span>
           </button>
 
           <button type="button" class="tile" data-goto="avisos">
@@ -171,6 +189,14 @@
             </span>
             <span class="tile-title">FSA Estudos</span>
             <span class="tile-desc">Talks e debates do escritório</span>
+          </button>
+
+          <button type="button" class="tile" data-goto="pedidos">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9z"/><path d="M7 5.5H5.5a1 1 0 0 0-1 1V20a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1V6.5a1 1 0 0 0-1-1H17"/><path d="M8 12h8M8 16h5"/></svg>
+            </span>
+            <span class="tile-title">Pedidos internos</span>
+            <span class="tile-desc">TI, compras, reembolso e abono de falta</span>
           </button>
 
           <button type="button" class="tile" data-goto="birthdays">
@@ -239,6 +265,11 @@
           </div>
         </div>
         <div id="birthdays-list" class="card divide-y divide-slate-100 !p-0"></div>
+
+        <div id="anniversaries-section" class="hidden mt-8">
+          <h3 id="anniversaries-title" class="font-heading text-base font-semibold text-brand-navy mb-3">Anos de casa</h3>
+          <div id="anniversaries-list" class="card divide-y divide-slate-100 !p-0"></div>
+        </div>
       </section>
 
       <!-- PAINEL: AVISOS -->
@@ -404,6 +435,100 @@
         <div id="manuals-list" class="card divide-y divide-slate-100 !p-0"></div>
         <div class="flex justify-center mt-5">
           <button type="button" id="manuals-load-more" class="hidden text-sm font-medium text-brand-navy border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-50">Carregar mais</button>
+        </div>
+      </section>
+
+      <!-- PAINEL: CALENDÁRIO DA EQUIPE -->
+      <section id="panel-equipe" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-4 text-brand-navy mt-3">Calendário da equipe</h2>
+
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <button type="button" id="btn-teamcal-prev" class="text-sm rounded-full px-4 py-1.5 border border-slate-200 text-brand-slate hover:bg-slate-50 disabled:opacity-40">&larr; Semana anterior</button>
+          <button type="button" id="btn-teamcal-next" class="text-sm rounded-full px-4 py-1.5 border border-slate-200 text-brand-slate hover:bg-slate-50 disabled:opacity-40">Próxima semana &rarr;</button>
+          <button type="button" id="btn-teamcal-today" class="hidden text-sm text-brand-navy underline">Voltar para esta semana</button>
+        </div>
+        <p id="teamcal-range" class="text-sm text-brand-slate mb-3"></p>
+
+        <div id="teamcal-table" class="card !p-0 overflow-x-auto mb-3"></div>
+        <p id="teamcal-note" class="hidden text-sm text-amber-700 mb-3"></p>
+
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-brand-slate mb-8">
+          <span><span class="inline-block rounded-md px-2 py-0.5 bg-amber-100 text-amber-800">Férias</span></span>
+          <span><span class="inline-block rounded-md px-2 py-0.5 bg-amber-50 text-amber-700 border border-dashed border-amber-300">Férias (pendente)</span> ainda não aprovadas</span>
+          <span><span class="inline-block rounded-md px-2 py-0.5 bg-rose-100 text-rose-700">Abono</span></span>
+          <span><span class="inline-block rounded-md px-2 py-0.5 bg-sky-100 text-sky-800">Home office</span></span>
+        </div>
+
+        <h3 class="font-heading text-base font-semibold text-brand-navy mb-3">Próximas semanas</h3>
+        <div id="teamcal-panorama" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
+      </section>
+
+      <!-- PAINEL: PEDIDOS INTERNOS -->
+      <section id="panel-pedidos" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-4 text-brand-navy mt-3">Pedidos internos</h2>
+
+        <div class="card mb-6">
+          <p class="text-sm font-medium mb-3">Novo pedido</p>
+          <div class="grid sm:grid-cols-2 gap-3">
+            <select id="req-kind" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white">
+              <option value="ti">TI</option>
+              <option value="compras">Compras</option>
+              <option value="reembolso">Reembolso</option>
+              <option value="abono">Abono de falta</option>
+            </select>
+            <input id="req-title" type="text" maxlength="200" placeholder="Assunto" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            <div id="req-amount-wrap" class="hidden">
+              <input id="req-amount" type="text" inputmode="decimal" maxlength="14" placeholder="Valor (R$)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full" />
+            </div>
+            <div id="req-dates-wrap" class="hidden grid grid-cols-2 gap-3 sm:col-span-2">
+              <label class="text-xs text-brand-slate">Data do abono
+                <input id="req-start" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mt-1" />
+              </label>
+              <label class="text-xs text-brand-slate">Até (se for mais de um dia)
+                <input id="req-end" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mt-1" />
+              </label>
+            </div>
+          </div>
+          <textarea id="req-description" rows="3" maxlength="5000" placeholder="Detalhes do pedido" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mt-3"></textarea>
+          <label class="block text-xs text-brand-slate mt-3"><span id="req-file-label">Anexo opcional (PDF ou imagem, até 10 MB)</span>
+            <input id="req-file" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp" class="block text-sm mt-1" />
+          </label>
+          <p id="req-form-error" class="text-sm text-red-500 mt-2 hidden"></p>
+          <div class="mt-3">
+            <button type="button" id="req-submit" class="btn-primary">Enviar pedido</button>
+          </div>
+        </div>
+
+        <div id="req-scope-box" class="hidden flex flex-wrap items-center gap-2 mb-3">
+          <button type="button" data-req-scope="all">Todos os pedidos</button>
+          <button type="button" data-req-scope="mine">Meus pedidos</button>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <button type="button" data-req-status="all">Todos</button>
+          <button type="button" data-req-status="pending">Pendentes</button>
+          <button type="button" data-req-status="approved">Aprovados</button>
+          <button type="button" data-req-status="rejected">Recusados</button>
+          <button type="button" data-req-status="done">Concluídos</button>
+          <select id="req-kind-filter" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white ml-auto">
+            <option value="all">Todos os tipos</option>
+            <option value="ti">TI</option>
+            <option value="compras">Compras</option>
+            <option value="reembolso">Reembolso</option>
+            <option value="abono">Abono de falta</option>
+          </select>
+        </div>
+
+        <div id="req-list" class="space-y-3"></div>
+        <div class="flex justify-center mt-5">
+          <button type="button" id="req-more" class="hidden text-sm font-medium text-brand-navy border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-50">Carregar mais</button>
         </div>
       </section>
 
