@@ -784,3 +784,25 @@ grant all on table
   public.study_sessions,
   public.study_materials
 to service_role;
+
+
+-- ----------------------------------------------------------------------------
+-- 21. ENDURECIMENTO: nada para quem não está logado (papel "anon")
+-- ----------------------------------------------------------------------------
+-- O Hub só é usado por pessoas logadas (papel "authenticated"). O papel "anon"
+-- (quem usa a chave pública sem estar logado) não precisa de acesso a nenhuma
+-- tabela, e as funções de gatilho abaixo não devem ser executáveis por ninguém
+-- além do próprio banco (o Postgres só checa EXECUTE ao CRIAR o gatilho).
+-- Aplicado em produção em 30/10/2026.
+
+revoke all on all tables in schema public from anon;
+revoke all on all sequences in schema public from anon;
+
+revoke execute on function
+  public.handle_new_user(),
+  public.prevent_self_privilege_escalation(),
+  public.notify_announcement_webhook(),
+  public.vacations_enforce_approval()
+from public, anon, authenticated;
+
+-- Em bancos novos, rode esta seção DEPOIS de criar todas as funções e tabelas.
