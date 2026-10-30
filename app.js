@@ -1953,7 +1953,7 @@ async function renderManualsList() {
 
     row.querySelector("[data-open]").addEventListener("click", async () => {
       if (!m.storage_path) {
-        if (m.url) window.open(m.url, "_blank", "noopener");
+        if (m.url && /^https?:\/\//i.test(m.url)) window.open(m.url, "_blank", "noopener");
         return;
       }
       // Abre a aba antes do await, para o navegador não bloquear o pop-up.
