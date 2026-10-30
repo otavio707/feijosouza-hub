@@ -92,6 +92,8 @@ async function enterApp(user) {
     loadInternSchedule(),
     loadManuals(),
     loadStudies(),
+    loadWorkAnniversaries(),
+    loadRequestsHome(),
     loadProfileTab(),
   ]);
 }
@@ -121,6 +123,8 @@ function goToPanel(key) {
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
   const panel = document.getElementById(`panel-${key}`);
   if (panel) panel.classList.remove("hidden");
+  if (key === "equipe") renderTeamCalendar().catch((e) => console.error("Calendário:", e));
+  if (key === "pedidos") renderRequests().catch((e) => console.error("Pedidos:", e));
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -2605,6 +2609,771 @@ async function addStudyMaterial(session, box) {
 
   studyOpenId = session.id;
   await renderStudies();
+}
+
+// ----------------------------------------------------------------------------
+// Calendário da equipe — quem está fora, em home office ou no escritório
+// ----------------------------------------------------------------------------
+// Só leitura: junta férias (aprovadas e pendentes), abonos de falta aprovados
+// (via função segura team_absences, que não expõe motivo/valor/anexo), home
+// office e feriados. Home office aparece SEPARADO: não entra na conta de "fora".
+
+const TEAM_CAL_MIN_OFFSET = -2;
+const TEAM_CAL_MAX_OFFSET = 26;
+const TEAM_CAL_PANORAMA_WEEKS = 8;
+const TEAM_CAL_WEEKDAYS = ["Seg", "Ter", "Qua", "Qui", "Sex"];
+
+let teamCalOffset = 0;
+let teamCalReady = false;
+let teamCalToken = 0;
+
+function teamCalWeekIsos(offset) {
+  const monday = getMondayOfWeek(new Date());
+  monday.setDate(monday.getDate() + offset * 7);
+  const out = [];
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    out.push(toISODate(d));
+  }
+  return out;
+}
+
+function teamCalIsHoliday(iso) {
+  return isHoliday(iso, Number(iso.slice(0, 4)));
+}
+
+function teamCalFirstName(p) {
+  const full = (p.full_name || p.email || "").trim();
+  return full.split(/\s+/)[0] || full;
+}
+
+function teamCalCoversDate(item, iso) {
+  return item.start_date <= iso && iso <= item.end_date;
+}
+
+// Situação de uma pessoa em um dia (dias úteis que não são feriado).
+// Prioridade: férias aprovadas > abono > férias pendentes > home office.
+function teamCalPersonDay(uid, iso, ctx) {
+  const vacs = ctx.vacationsByUser.get(uid) || [];
+  if (vacs.some((v) => v.status === "approved" && teamCalCoversDate(v, iso))) {
+    return { kind: "vacation", label: "Férias" };
+  }
+  const abs = ctx.absencesByUser.get(uid) || [];
+  if (abs.some((a) => teamCalCoversDate(a, iso))) {
+    return { kind: "abono", label: "Abono" };
+  }
+  if (vacs.some((v) => v.status === "pending" && teamCalCoversDate(v, iso))) {
+    return { kind: "vacation_pending", label: "Férias (pendente)" };
+  }
+  const periods = ctx.homeOffice.get(`${uid}|${iso}`);
+  if (periods && periods.length) {
+    if (isFullDayPeriods(periods)) return { kind: "ho", label: "Home office" };
+    const names = periods.map((p) => (PERIOD_LABELS[p] || p).toLowerCase()).join(" e ");
+    return { kind: "ho_part", label: `Home office (${names})` };
+  }
+  return { kind: "office", label: "Escritório" };
+}
+
+function teamCalGroupBy(rows) {
+  const map = new Map();
+  (rows || []).forEach((r) => {
+    if (!map.has(r.user_id)) map.set(r.user_id, []);
+    map.get(r.user_id).push(r);
+  });
+  return map;
+}
+
+async function fetchTeamCalendarData(startIso, endIso, homeIsos) {
+  const [profilesRes, vacRes, absRes, hoRes] = await Promise.all([
+    sb.from("profiles").select("id, full_name, email").order("full_name"),
+    sb
+      .from("vacations")
+      .select("user_id, start_date, end_date, status")
+      .in("status", ["approved", "pending"])
+      .lte("start_date", endIso)
+      .gte("end_date", startIso),
+    sb.rpc("team_absences", { d_from: startIso, d_to: endIso }),
+    sb.from("homeoffice_entries").select("user_id, entry_date, period").in("entry_date", homeIsos),
+  ]);
+
+  const homeOffice = new Map();
+  (hoRes.data || []).forEach((e) => {
+    const key = `${e.user_id}|${e.entry_date}`;
+    if (!homeOffice.has(key)) homeOffice.set(key, []);
+    homeOffice.get(key).push(e.period);
+  });
+
+  return {
+    error: profilesRes.error || vacRes.error || null,
+    absencesUnavailable: !!absRes.error,
+    profiles: profilesRes.data || [],
+    vacationsByUser: teamCalGroupBy(vacRes.data),
+    absencesByUser: teamCalGroupBy(absRes.data),
+    homeOffice,
+  };
+}
+
+function teamCalCellHtml(info, isHoliday) {
+  if (isHoliday) {
+    return `<td class="py-2 px-2 text-center text-xs bg-slate-50 text-slate-400">Feriado</td>`;
+  }
+  const styles = {
+    vacation: "bg-amber-100 text-amber-800",
+    vacation_pending: "bg-amber-50 text-amber-700 border border-dashed border-amber-300",
+    abono: "bg-rose-100 text-rose-700",
+    ho: "bg-sky-100 text-sky-800",
+    ho_part: "bg-sky-50 text-sky-700",
+    office: "text-slate-300",
+  };
+  const label = info.kind === "office" ? "·" : escapeHtml(info.label);
+  const title = info.kind === "office" ? ' title="Escritório"' : "";
+  return `<td class="py-1.5 px-1 text-center text-xs"><span class="inline-block rounded-md px-2 py-1 ${styles[info.kind]}"${title}>${label}</span></td>`;
+}
+
+function teamCalMaxOutInWeek(isos, profiles, ctx) {
+  let max = 0;
+  isos.forEach((iso) => {
+    if (teamCalIsHoliday(iso)) return;
+    const out = profiles.filter((p) => {
+      const k = teamCalPersonDay(p.id, iso, ctx).kind;
+      return k === "vacation" || k === "abono";
+    }).length;
+    if (out > max) max = out;
+  });
+  return max;
+}
+
+async function renderTeamCalendar() {
+  const table = document.getElementById("teamcal-table");
+  if (!table) return;
+  setupTeamCalendarControls();
+
+  const token = ++teamCalToken;
+  const weekIsos = teamCalWeekIsos(teamCalOffset);
+  const windowEnd = teamCalWeekIsos(teamCalOffset + TEAM_CAL_PANORAMA_WEEKS - 1)[4];
+
+  document.getElementById("teamcal-range").textContent =
+    `Semana de ${formatDateBR(weekIsos[0])} a ${formatDateBR(weekIsos[4])}` +
+    (teamCalOffset === 0 ? " (semana atual)" : "");
+  document.getElementById("btn-teamcal-prev").disabled = teamCalOffset <= TEAM_CAL_MIN_OFFSET;
+  document.getElementById("btn-teamcal-next").disabled = teamCalOffset >= TEAM_CAL_MAX_OFFSET;
+  document.getElementById("btn-teamcal-today").classList.toggle("hidden", teamCalOffset === 0);
+
+  const ctx = await fetchTeamCalendarData(weekIsos[0], windowEnd, weekIsos);
+  if (token !== teamCalToken) return; // o usuário já navegou para outra semana
+
+  if (ctx.error) {
+    table.innerHTML = `<p class="p-5 text-sm text-red-500">Erro ao carregar o calendário: ${escapeHtml(ctx.error.message)}</p>`;
+    return;
+  }
+
+  const profiles = ctx.profiles;
+  const total = profiles.length;
+
+  const head = weekIsos
+    .map((iso, i) => {
+      const holiday = teamCalIsHoliday(iso);
+      const today = iso === toISODate(new Date());
+      return `<th class="py-2 px-1 text-center font-medium ${today ? "text-brand-navy" : "text-brand-slate"}">
+        <span class="block text-xs">${TEAM_CAL_WEEKDAYS[i]}</span>
+        <span class="block text-xs font-normal ${today ? "font-semibold" : ""}">${escapeHtml(formatDateBR(iso).slice(0, 5))}</span>
+        ${holiday ? '<span class="block text-[10px] text-slate-400">feriado</span>' : ""}
+      </th>`;
+    })
+    .join("");
+
+  const rows = profiles
+    .map((p) => {
+      const mine = p.id === currentUser?.id;
+      const cells = weekIsos
+        .map((iso) => {
+          const holiday = teamCalIsHoliday(iso);
+          return teamCalCellHtml(holiday ? null : teamCalPersonDay(p.id, iso, ctx), holiday);
+        })
+        .join("");
+      return `<tr class="border-t border-slate-100 ${mine ? "bg-brand-bg/60" : ""}">
+        <td class="py-2 pr-3 pl-4 text-sm font-medium whitespace-nowrap">${escapeHtml(p.full_name || p.email)}${mine ? ' <span class="text-xs font-normal text-brand-mist">(você)</span>' : ""}</td>
+        ${cells}
+      </tr>`;
+    })
+    .join("");
+
+  const summaryCells = weekIsos
+    .map((iso) => {
+      if (teamCalIsHoliday(iso)) return `<td class="py-2 px-1 text-center text-xs text-slate-300">—</td>`;
+      let office = 0;
+      let home = 0;
+      let out = 0;
+      profiles.forEach((p) => {
+        const k = teamCalPersonDay(p.id, iso, ctx).kind;
+        if (k === "vacation" || k === "abono") out++;
+        else if (k === "ho") home++;
+        else office++;
+      });
+      return `<td class="py-2 px-1 text-center text-xs text-brand-slate leading-5">
+        <span class="block"><span class="font-semibold">${office}</span> escritório</span>
+        <span class="block"><span class="font-semibold">${home}</span> home office</span>
+        <span class="block"><span class="font-semibold">${out}</span> fora</span>
+      </td>`;
+    })
+    .join("");
+
+  table.innerHTML = `
+    <table class="w-full min-w-[34rem]">
+      <thead><tr class="bg-slate-50"><th class="py-2 pl-4 pr-3 text-left text-xs font-medium text-brand-slate">Pessoa (${total})</th>${head}</tr></thead>
+      <tbody>${rows || `<tr><td colspan="6" class="p-5 text-sm text-slate-400">Nenhuma pessoa cadastrada.</td></tr>`}</tbody>
+      <tfoot><tr class="border-t border-slate-200 bg-slate-50/70"><td class="py-2 pl-4 pr-3 text-xs font-medium text-brand-slate">No dia</td>${summaryCells}</tr></tfoot>
+    </table>`;
+
+  const note = document.getElementById("teamcal-note");
+  if (note) {
+    note.classList.toggle("hidden", !ctx.absencesUnavailable);
+    note.textContent = ctx.absencesUnavailable
+      ? "Não foi possível carregar os abonos de falta agora; o calendário mostra apenas férias e home office."
+      : "";
+  }
+
+  renderTeamCalendarPanorama(ctx, profiles, total);
+}
+
+function renderTeamCalendarPanorama(ctx, profiles, total) {
+  const box = document.getElementById("teamcal-panorama");
+  if (!box) return;
+  const limit = Math.floor(total / 2); // fora acima disso => menos da metade fica disponível
+  const cards = [];
+  for (let w = 0; w < TEAM_CAL_PANORAMA_WEEKS; w++) {
+    const offset = teamCalOffset + w;
+    if (offset > TEAM_CAL_MAX_OFFSET) break;
+    const isos = teamCalWeekIsos(offset);
+    const max = teamCalMaxOutInWeek(isos, profiles, ctx);
+    const over = total > 0 && max > limit;
+    const selected = w === 0;
+    cards.push(`
+      <button type="button" data-teamcal-week="${offset}" class="text-left rounded-xl border px-3 py-2 ${
+        selected ? "border-brand-navy bg-white" : "border-slate-200 bg-white hover:bg-slate-50"
+      }">
+        <span class="block text-xs text-brand-slate">${escapeHtml(formatDateBR(isos[0]).slice(0, 5))} a ${escapeHtml(formatDateBR(isos[4]).slice(0, 5))}</span>
+        <span class="block text-sm font-semibold ${over ? "text-red-600" : max > 0 ? "text-amber-700" : "text-slate-400"}">${
+          max === 0 ? "ninguém fora" : `até ${max} ${max === 1 ? "pessoa fora" : "pessoas fora"}`
+        }</span>
+        ${over ? '<span class="block text-[11px] text-red-500">mais da metade da equipe fora</span>' : ""}
+      </button>`);
+  }
+  box.innerHTML = cards.join("");
+  box.querySelectorAll("[data-teamcal-week]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      teamCalOffset = Number(btn.dataset.teamcalWeek);
+      renderTeamCalendar();
+    });
+  });
+}
+
+function setupTeamCalendarControls() {
+  if (teamCalReady) return;
+  teamCalReady = true;
+  document.getElementById("btn-teamcal-prev").addEventListener("click", () => {
+    if (teamCalOffset > TEAM_CAL_MIN_OFFSET) {
+      teamCalOffset -= 1;
+      renderTeamCalendar();
+    }
+  });
+  document.getElementById("btn-teamcal-next").addEventListener("click", () => {
+    if (teamCalOffset < TEAM_CAL_MAX_OFFSET) {
+      teamCalOffset += 1;
+      renderTeamCalendar();
+    }
+  });
+  document.getElementById("btn-teamcal-today").addEventListener("click", () => {
+    teamCalOffset = 0;
+    renderTeamCalendar();
+  });
+}
+
+// ----------------------------------------------------------------------------
+// Pedidos internos — TI, compras, reembolso e abono de falta
+// ----------------------------------------------------------------------------
+// Cada pessoa vê só os próprios pedidos; administradores veem e tratam todos
+// (a RLS garante isso no banco). Comprovantes ficam no bucket privado
+// "requests" e abrem por link temporário.
+
+const REQUEST_KIND_LABELS = { ti: "TI", compras: "Compras", reembolso: "Reembolso", abono: "Abono de falta" };
+const REQUEST_STATUS_LABELS = { pending: "Pendente", approved: "Aprovado", rejected: "Recusado", done: "Concluído" };
+const REQUEST_STATUS_CLASSES = {
+  pending: "bg-amber-100 text-amber-800",
+  approved: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-700",
+  done: "bg-slate-100 text-brand-slate",
+};
+const REQUEST_MAX_FILE_BYTES = 10 * 1024 * 1024;
+const REQUEST_ALLOWED_TYPES = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+const REQUEST_PAGE_SIZE = 20;
+
+let requestsReady = false;
+let requestsScope = "mine"; // "mine" | "all" (somente administradores)
+let requestsStatusFilter = "all";
+let requestsKindFilter = "all";
+let requestsLimit = REQUEST_PAGE_SIZE;
+let requestsToken = 0;
+
+function parseMoneyBRL(text) {
+  let t = String(text || "").replace(/[^\d.,]/g, "");
+  if (!t) return null;
+  if (t.includes(",")) t = t.replace(/\./g, "").replace(",", ".");
+  else if ((t.match(/\./g) || []).length > 1) t = t.replace(/\./g, "");
+  const n = Number(t);
+  if (!Number.isFinite(n) || n <= 0 || n >= 10000000) return null;
+  return Math.round(n * 100) / 100;
+}
+
+function formatMoneyBRL(value) {
+  return Number(value).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function requestKindClass(kind) {
+  return kind === "abono" ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-brand-slate";
+}
+
+function updateRequestFormFields() {
+  const kind = document.getElementById("req-kind").value;
+  const amountWrap = document.getElementById("req-amount-wrap");
+  const datesWrap = document.getElementById("req-dates-wrap");
+  const amountInput = document.getElementById("req-amount");
+  amountWrap.classList.toggle("hidden", kind !== "reembolso" && kind !== "compras");
+  datesWrap.classList.toggle("hidden", kind !== "abono");
+  amountInput.placeholder = kind === "reembolso" ? "Valor do reembolso (R$)" : "Valor estimado (R$, opcional)";
+  document.getElementById("req-file-label").textContent =
+    kind === "reembolso" ? "Comprovante (PDF ou imagem, até 10 MB)" : "Anexo opcional (PDF ou imagem, até 10 MB)";
+}
+
+function setupRequestsControls() {
+  if (requestsReady) return;
+  requestsReady = true;
+
+  document.getElementById("req-kind").addEventListener("change", updateRequestFormFields);
+  updateRequestFormFields();
+  document.getElementById("req-submit").addEventListener("click", submitRequest);
+
+  document.querySelectorAll("[data-req-status]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      requestsStatusFilter = btn.dataset.reqStatus;
+      requestsLimit = REQUEST_PAGE_SIZE;
+      renderRequests();
+    });
+  });
+  document.getElementById("req-kind-filter").addEventListener("change", (ev) => {
+    requestsKindFilter = ev.target.value;
+    requestsLimit = REQUEST_PAGE_SIZE;
+    renderRequests();
+  });
+
+  if (currentProfile?.is_admin) {
+    const scopeBox = document.getElementById("req-scope-box");
+    scopeBox.classList.remove("hidden");
+    requestsScope = "all";
+    requestsStatusFilter = "pending";
+    scopeBox.querySelectorAll("[data-req-scope]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        requestsScope = btn.dataset.reqScope;
+        requestsLimit = REQUEST_PAGE_SIZE;
+        renderRequests();
+      });
+    });
+  }
+
+  document.getElementById("req-more").addEventListener("click", () => {
+    requestsLimit += REQUEST_PAGE_SIZE;
+    renderRequests();
+  });
+}
+
+async function submitRequest() {
+  const errEl = document.getElementById("req-form-error");
+  errEl.classList.add("hidden");
+  const showError = (text) => {
+    errEl.textContent = text;
+    errEl.classList.remove("hidden");
+  };
+
+  const kind = document.getElementById("req-kind").value;
+  const title = document.getElementById("req-title").value.trim();
+  const description = document.getElementById("req-description").value.trim();
+  const amountText = document.getElementById("req-amount").value.trim();
+  const startDate = document.getElementById("req-start").value;
+  const endDate = document.getElementById("req-end").value;
+  const file = document.getElementById("req-file").files[0];
+
+  if (!title) return showError("Preencha o assunto do pedido.");
+  let amount = null;
+  if (kind === "reembolso" || kind === "compras") {
+    if (amountText) {
+      amount = parseMoneyBRL(amountText);
+      if (amount === null) return showError("Valor inválido. Exemplo: 120,50");
+    } else if (kind === "reembolso") {
+      return showError("Informe o valor do reembolso.");
+    }
+  }
+  let start = null;
+  let end = null;
+  if (kind === "abono") {
+    if (!startDate) return showError("Informe a data do abono.");
+    if (endDate && endDate < startDate) return showError("A data final não pode ser anterior à inicial.");
+    start = startDate;
+    end = endDate || null;
+  }
+  if (file) {
+    if (!REQUEST_ALLOWED_TYPES.includes(file.type)) return showError("Anexe um PDF ou uma imagem (JPG, PNG ou WebP).");
+    if (file.size > REQUEST_MAX_FILE_BYTES) return showError("Arquivo maior que 10 MB. Envie um arquivo menor.");
+  }
+
+  const btn = document.getElementById("req-submit");
+  btn.disabled = true;
+  btn.textContent = "Enviando...";
+  const restore = () => {
+    btn.disabled = false;
+    btn.textContent = "Enviar pedido";
+  };
+
+  let attachmentPath = null;
+  try {
+  if (file) {
+    attachmentPath = `${currentUser.id}/${crypto.randomUUID()}-${studySafeFileName(file.name)}`;
+    const { error: uploadError } = await sb.storage.from("requests").upload(attachmentPath, file);
+    if (uploadError) {
+      showError("Erro ao enviar o anexo: " + uploadError.message);
+      restore();
+      return;
+    }
+  }
+
+  const { error } = await sb.from("internal_requests").insert({
+    kind,
+    title,
+    description: description || null,
+    amount,
+    start_date: start,
+    end_date: end,
+    attachment_path: attachmentPath,
+    attachment_name: file ? file.name.slice(0, 255) : null,
+    user_id: currentUser.id,
+  });
+
+  if (error) {
+    if (attachmentPath) await sb.storage.from("requests").remove([attachmentPath]);
+    showError("Erro ao enviar o pedido: " + error.message);
+    restore();
+    return;
+  }
+
+  document.getElementById("req-title").value = "";
+  document.getElementById("req-description").value = "";
+  document.getElementById("req-amount").value = "";
+  document.getElementById("req-start").value = "";
+  document.getElementById("req-end").value = "";
+  document.getElementById("req-file").value = "";
+  restore();
+  if (requestsScope === "all" && requestsStatusFilter !== "pending" && requestsStatusFilter !== "all") {
+    requestsStatusFilter = "all";
+  }
+  await Promise.all([renderRequests(), renderPendingRequestsAlert()]);
+  } catch (e) {
+    if (attachmentPath) {
+      try {
+        await sb.storage.from("requests").remove([attachmentPath]);
+      } catch (e2) {}
+    }
+    showError("Erro inesperado ao enviar o pedido: " + (e?.message || e));
+    restore();
+  }
+}
+
+function requestPeriodText(r) {
+  if (!r.start_date) return "";
+  const end = r.end_date || r.start_date;
+  const days = countBusinessDays(r.start_date, end);
+  const range =
+    end === r.start_date
+      ? formatDateBR(r.start_date)
+      : `${formatDateBR(r.start_date)} a ${formatDateBR(end)}`;
+  return `${range} (${formatBusinessDays(days)})`;
+}
+
+function buildRequestCard(r) {
+  const isAdmin = !!currentProfile?.is_admin;
+  const mine = r.user_id === currentUser.id;
+  const showWho = requestsScope === "all" && isAdmin;
+  const who = r.requester?.full_name || r.requester?.email || "";
+  const details = [
+    r.amount != null ? formatMoneyBRL(r.amount) : "",
+    requestPeriodText(r),
+  ].filter(Boolean);
+  const decider = r.decider?.full_name || r.decider?.email || "";
+  const decisionLine =
+    r.status !== "pending" && r.decided_at
+      ? `${REQUEST_STATUS_LABELS[r.status]}${decider ? " por " + decider : ""} em ${formatDateBR(r.decided_at.slice(0, 10))}`
+      : "";
+
+  const card = document.createElement("div");
+  card.className = "card";
+  card.innerHTML = `
+    <div class="flex flex-wrap items-start justify-between gap-2">
+      <div class="min-w-0">
+        <div class="flex flex-wrap items-center gap-2 mb-1">
+          <span class="text-xs rounded-full px-2.5 py-0.5 ${requestKindClass(r.kind)}">${escapeHtml(REQUEST_KIND_LABELS[r.kind] || r.kind)}</span>
+          <span class="text-xs rounded-full px-2.5 py-0.5 ${REQUEST_STATUS_CLASSES[r.status] || ""}">${escapeHtml(REQUEST_STATUS_LABELS[r.status] || r.status)}</span>
+        </div>
+        <p class="font-medium break-words">${escapeHtml(r.title)}</p>
+        <p class="text-xs text-brand-mist mt-0.5">${
+          showWho && who ? escapeHtml(who) + " · " : ""
+        }${escapeHtml(formatDateTimeBR(r.created_at))}</p>
+      </div>
+      ${
+        mine && r.status === "pending"
+          ? `<button type="button" data-cancel class="text-sm text-red-500 hover:underline shrink-0">Cancelar pedido</button>`
+          : ""
+      }
+    </div>
+    ${details.length ? `<p class="text-sm text-brand-slate mt-2">${escapeHtml(details.join(" · "))}</p>` : ""}
+    ${r.description ? `<p class="text-sm text-brand-slate mt-2 whitespace-pre-line break-words">${escapeHtml(r.description)}</p>` : ""}
+    ${
+      r.attachment_path
+        ? `<button type="button" data-attach class="mt-2 text-sm font-medium text-brand-navy underline">Abrir anexo${
+            r.attachment_name ? " (" + escapeHtml(r.attachment_name) + ")" : ""
+          }</button>`
+        : ""
+    }
+    ${decisionLine ? `<p class="text-xs text-brand-mist mt-2">${escapeHtml(decisionLine)}</p>` : ""}
+    ${r.decision_note ? `<p class="text-sm text-brand-slate mt-1 whitespace-pre-line break-words">Observação: ${escapeHtml(r.decision_note)}</p>` : ""}
+    ${
+      isAdmin
+        ? `<div class="mt-3 pt-3 border-t border-slate-100">
+            ${
+              r.status === "pending" || r.status === "approved"
+                ? `<textarea data-note rows="2" maxlength="1000" placeholder="Observação (obrigatória ao recusar)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full"></textarea>`
+                : ""
+            }
+            <p data-decision-error class="text-sm text-red-500 mt-1 hidden"></p>
+            <div class="flex flex-wrap gap-3 mt-2">
+              ${r.status === "pending" ? `<button type="button" data-decide="approved" class="text-sm font-medium text-green-700 hover:underline">Aprovar</button>` : ""}
+              ${r.status === "pending" || r.status === "approved" ? `<button type="button" data-decide="done" class="text-sm font-medium text-brand-navy hover:underline">Marcar como concluído</button>` : ""}
+              ${r.status === "pending" || r.status === "approved" ? `<button type="button" data-decide="rejected" class="text-sm font-medium text-red-600 hover:underline">Recusar</button>` : ""}
+              ${r.status === "rejected" || r.status === "done" ? `<button type="button" data-decide="pending" class="text-sm text-brand-slate hover:underline">Reabrir</button>` : ""}
+            </div>
+          </div>`
+        : ""
+    }
+  `;
+
+  card.querySelector("[data-attach]")?.addEventListener("click", () => openRequestAttachment(r));
+  card.querySelector("[data-cancel]")?.addEventListener("click", () => cancelRequest(r));
+  card.querySelectorAll("[data-decide]").forEach((btn) => {
+    btn.addEventListener("click", () => decideRequest(r, btn.dataset.decide, card));
+  });
+  return card;
+}
+
+async function openRequestAttachment(r) {
+  // Abre a aba antes do await, para o navegador não bloquear o pop-up.
+  const newTab = window.open("", "_blank");
+  if (newTab) {
+    try {
+      newTab.opener = null;
+    } catch (e) {}
+  }
+  const { data, error } = await sb.storage.from("requests").createSignedUrl(r.attachment_path, 300);
+  if (error || !data?.signedUrl) {
+    if (newTab) newTab.close();
+    alert("Não foi possível abrir o anexo agora. Tente novamente.");
+    return;
+  }
+  if (newTab) newTab.location.href = data.signedUrl;
+}
+
+async function cancelRequest(r) {
+  if (!window.confirm("Cancelar este pedido? Ele será apagado.")) return;
+  if (r.attachment_path) await sb.storage.from("requests").remove([r.attachment_path]);
+  const { error } = await sb.from("internal_requests").delete().eq("id", r.id);
+  if (error) {
+    alert("Não foi possível cancelar o pedido: " + error.message);
+    return;
+  }
+  await Promise.all([renderRequests(), renderPendingRequestsAlert()]);
+}
+
+async function decideRequest(r, status, card) {
+  const errEl = card.querySelector("[data-decision-error]");
+  errEl.classList.add("hidden");
+  const note = (card.querySelector("[data-note]")?.value || "").trim();
+  if (status === "rejected" && !note) {
+    errEl.textContent = "Explique o motivo da recusa na observação.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+  const patch = { status };
+  if (status === "pending") patch.decision_note = null;
+  else if (note) patch.decision_note = note;
+  const { error } = await sb.from("internal_requests").update(patch).eq("id", r.id);
+  if (error) {
+    errEl.textContent = "Erro ao salvar a decisão: " + error.message;
+    errEl.classList.remove("hidden");
+    return;
+  }
+  await Promise.all([renderRequests(), renderPendingRequestsAlert()]);
+}
+
+async function renderRequests() {
+  const list = document.getElementById("req-list");
+  if (!list) return;
+  setupRequestsControls();
+  const token = ++requestsToken;
+  const isAdmin = !!currentProfile?.is_admin;
+
+  if (isAdmin) {
+    document.querySelectorAll("[data-req-scope]").forEach((btn) => {
+      const active = btn.dataset.reqScope === requestsScope;
+      btn.className =
+        "text-sm rounded-full px-4 py-1.5 border " +
+        (active ? "bg-brand-navy text-white border-brand-navy" : "border-slate-200 text-brand-slate hover:bg-slate-50");
+    });
+  }
+  document.querySelectorAll("[data-req-status]").forEach((btn) => {
+    const active = btn.dataset.reqStatus === requestsStatusFilter;
+    btn.className =
+      "text-sm rounded-full px-4 py-1.5 border " +
+      (active ? "bg-brand-navy text-white border-brand-navy" : "border-slate-200 text-brand-slate hover:bg-slate-50");
+  });
+  document.getElementById("req-kind-filter").value = requestsKindFilter;
+
+  let query = sb
+    .from("internal_requests")
+    .select("*, requester:profiles!user_id(full_name, email), decider:profiles!decided_by(full_name, email)")
+    .order("created_at", { ascending: false })
+    .limit(requestsLimit + 1);
+  if (!(isAdmin && requestsScope === "all")) query = query.eq("user_id", currentUser.id);
+  if (requestsStatusFilter !== "all") query = query.eq("status", requestsStatusFilter);
+  if (requestsKindFilter !== "all") query = query.eq("kind", requestsKindFilter);
+
+  const { data, error } = await query;
+  if (token !== requestsToken) return;
+
+  if (error) {
+    list.innerHTML = `<p class="text-sm text-red-500">Erro ao carregar os pedidos: ${escapeHtml(error.message)}</p>`;
+    updateLoadMoreButton("req-more", false);
+    return;
+  }
+
+  const rows = data || [];
+  const visible = rows.slice(0, requestsLimit);
+  list.innerHTML = "";
+  if (visible.length === 0) {
+    list.innerHTML = `<p class="text-sm text-slate-400">Nenhum pedido encontrado.</p>`;
+  } else {
+    visible.forEach((r) => list.appendChild(buildRequestCard(r)));
+  }
+  document.getElementById("req-more").classList.toggle("hidden", rows.length <= requestsLimit);
+}
+
+async function renderPendingRequestsAlert() {
+  const el = document.getElementById("pending-requests-alert");
+  if (!el) return;
+  if (!currentProfile?.is_admin) {
+    el.classList.add("hidden");
+    return;
+  }
+  const { count } = await sb
+    .from("internal_requests")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "pending");
+  if (!count) {
+    el.classList.add("hidden");
+    return;
+  }
+  document.getElementById("pending-requests-alert-text").textContent =
+    count === 1
+      ? "1 pedido interno aguardando decisão"
+      : `${count} pedidos internos aguardando decisão`;
+  el.classList.remove("hidden");
+}
+
+async function loadRequestsHome() {
+  try {
+    await renderPendingRequestsAlert();
+  } catch (e) {
+    console.error("Pedidos internos:", e);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Anos de casa — quem completa aniversário de admissão neste mês
+// ----------------------------------------------------------------------------
+// Vem da função segura work_anniversaries (nome, data e anos completos), pois
+// a ficha do funcionário (employee_profile_details) é restrita.
+
+async function loadWorkAnniversaries() {
+  try {
+    const now = new Date();
+    const first = toISODate(new Date(now.getFullYear(), now.getMonth(), 1));
+    const last = toISODate(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+    const { data, error } = await sb.rpc("work_anniversaries", { d_from: first, d_to: last });
+    if (error) throw error;
+    renderWorkAnniversaries(data || [], toISODate(now), now);
+  } catch (e) {
+    console.error("Anos de casa:", e);
+    renderWorkAnniversaries([], toISODate(new Date()), new Date());
+  }
+}
+
+function renderWorkAnniversaries(items, todayIso, now) {
+  const card = document.getElementById("summary-anniv-card");
+  const section = document.getElementById("anniversaries-section");
+  const list = document.getElementById("anniversaries-list");
+  const monthName = now.toLocaleDateString("pt-BR", { month: "long" });
+
+  if (!items.length) {
+    if (card) card.classList.add("hidden");
+    if (section) section.classList.add("hidden");
+    return;
+  }
+
+  const sorted = [...items].sort((a, b) => a.anniversary.localeCompare(b.anniversary));
+  const yearsText = (n) => `${n} ${n === 1 ? "ano" : "anos"} de casa`;
+  const dayText = (it) => (it.anniversary === todayIso ? "hoje" : formatDateBR(it.anniversary).slice(0, 5));
+
+  if (card) {
+    const firstNames = sorted.map((it) => (it.full_name || "").trim().split(/\s+/)[0]).filter(Boolean);
+    const joined =
+      firstNames.length <= 1
+        ? firstNames[0] || ""
+        : firstNames.slice(0, -1).join(", ") + " e " + firstNames[firstNames.length - 1];
+    document.getElementById("summary-anniv-label").textContent = `Anos de casa · ${monthName}`;
+    document.getElementById("summary-anniv-names").textContent = joined;
+    document.getElementById("summary-anniv-sub").textContent = sorted
+      .map((it) => `${(it.full_name || "").trim().split(/\s+/)[0]}: ${yearsText(it.years)} (${dayText(it)})`)
+      .join(" · ");
+    card.classList.remove("hidden");
+  }
+
+  if (section && list) {
+    document.getElementById("anniversaries-title").textContent = `Anos de casa em ${monthName}`;
+    list.innerHTML = "";
+    sorted.forEach((it) => {
+      const row = document.createElement("div");
+      row.className = "flex items-center justify-between p-4";
+      const badge =
+        it.anniversary === todayIso
+          ? `<span class="text-sm bg-amber-100 text-amber-700 rounded-full px-3 py-1">Hoje!</span>`
+          : `<span class="text-sm text-slate-400">${escapeHtml(formatDateBR(it.anniversary).slice(0, 5))}</span>`;
+      row.innerHTML = `
+        <div>
+          <p class="font-medium">${escapeHtml(it.full_name)}</p>
+          <p class="text-sm text-slate-500">${escapeHtml(yearsText(it.years))}</p>
+        </div>
+        ${badge}
+      `;
+      list.appendChild(row);
+    });
+    section.classList.remove("hidden");
+  }
 }
 
 // ----------------------------------------------------------------------------
