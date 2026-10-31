@@ -2614,9 +2614,8 @@ async function addStudyMaterial(session, box) {
 // ----------------------------------------------------------------------------
 // Calendário da equipe — quem está fora, em home office ou no escritório
 // ----------------------------------------------------------------------------
-// Só leitura: junta férias (aprovadas e pendentes), abonos de falta aprovados
-// (via função segura team_absences, que não expõe motivo/valor/anexo), home
-// office e feriados. Home office aparece SEPARADO: não entra na conta de "fora".
+// Só leitura: junta férias (aprovadas e pendentes), home office e feriados.
+// Home office aparece SEPARADO: não entra na conta de "fora".
 
 const TEAM_CAL_MIN_OFFSET = -2;
 const TEAM_CAL_MAX_OFFSET = 26;
@@ -2653,15 +2652,11 @@ function teamCalCoversDate(item, iso) {
 }
 
 // Situação de uma pessoa em um dia (dias úteis que não são feriado).
-// Prioridade: férias aprovadas > abono > férias pendentes > home office.
+// Prioridade: férias aprovadas > férias pendentes > home office.
 function teamCalPersonDay(uid, iso, ctx) {
   const vacs = ctx.vacationsByUser.get(uid) || [];
   if (vacs.some((v) => v.status === "approved" && teamCalCoversDate(v, iso))) {
     return { kind: "vacation", label: "Férias" };
-  }
-  const abs = ctx.absencesByUser.get(uid) || [];
-  if (abs.some((a) => teamCalCoversDate(a, iso))) {
-    return { kind: "abono", label: "Abono" };
   }
   if (vacs.some((v) => v.status === "pending" && teamCalCoversDate(v, iso))) {
     return { kind: "vacation_pending", label: "Férias (pendente)" };
@@ -2685,7 +2680,7 @@ function teamCalGroupBy(rows) {
 }
 
 async function fetchTeamCalendarData(startIso, endIso, homeIsos) {
-  const [profilesRes, vacRes, absRes, hoRes] = await Promise.all([
+  const [profilesRes, vacRes, hoRes] = await Promise.all([
     sb.from("profiles").select("id, full_name, email").order("full_name"),
     sb
       .from("vacations")
@@ -2693,7 +2688,6 @@ async function fetchTeamCalendarData(startIso, endIso, homeIsos) {
       .in("status", ["approved", "pending"])
       .lte("start_date", endIso)
       .gte("end_date", startIso),
-    sb.rpc("team_absences", { d_from: startIso, d_to: endIso }),
     sb.from("homeoffice_entries").select("user_id, entry_date, period").in("entry_date", homeIsos),
   ]);
 
@@ -2706,10 +2700,8 @@ async function fetchTeamCalendarData(startIso, endIso, homeIsos) {
 
   return {
     error: profilesRes.error || vacRes.error || null,
-    absencesUnavailable: !!absRes.error,
     profiles: profilesRes.data || [],
     vacationsByUser: teamCalGroupBy(vacRes.data),
-    absencesByUser: teamCalGroupBy(absRes.data),
     homeOffice,
   };
 }
@@ -2721,7 +2713,6 @@ function teamCalCellHtml(info, isHoliday) {
   const styles = {
     vacation: "bg-amber-100 text-amber-800",
     vacation_pending: "bg-amber-50 text-amber-700 border border-dashed border-amber-300",
-    abono: "bg-rose-100 text-rose-700",
     ho: "bg-sky-100 text-sky-800",
     ho_part: "bg-sky-50 text-sky-700",
     office: "text-slate-300",
@@ -2737,7 +2728,7 @@ function teamCalMaxOutInWeek(isos, profiles, ctx) {
     if (teamCalIsHoliday(iso)) return;
     const out = profiles.filter((p) => {
       const k = teamCalPersonDay(p.id, iso, ctx).kind;
-      return k === "vacation" || k === "abono";
+      return k === "vacation";
     }).length;
     if (out > max) max = out;
   });
@@ -2807,7 +2798,7 @@ async function renderTeamCalendar() {
       let out = 0;
       profiles.forEach((p) => {
         const k = teamCalPersonDay(p.id, iso, ctx).kind;
-        if (k === "vacation" || k === "abono") out++;
+        if (k === "vacation") out++;
         else if (k === "ho") home++;
         else office++;
       });
@@ -2825,14 +2816,6 @@ async function renderTeamCalendar() {
       <tbody>${rows || `<tr><td colspan="6" class="p-5 text-sm text-slate-400">Nenhuma pessoa cadastrada.</td></tr>`}</tbody>
       <tfoot><tr class="border-t border-slate-200 bg-slate-50/70"><td class="py-2 pl-4 pr-3 text-xs font-medium text-brand-slate">No dia</td>${summaryCells}</tr></tfoot>
     </table>`;
-
-  const note = document.getElementById("teamcal-note");
-  if (note) {
-    note.classList.toggle("hidden", !ctx.absencesUnavailable);
-    note.textContent = ctx.absencesUnavailable
-      ? "Não foi possível carregar os abonos de falta agora; o calendário mostra apenas férias e home office."
-      : "";
-  }
 
   renderTeamCalendarPanorama(ctx, profiles, total);
 }
@@ -2891,13 +2874,13 @@ function setupTeamCalendarControls() {
 }
 
 // ----------------------------------------------------------------------------
-// Pedidos internos — TI, compras, reembolso e abono de falta
+// Pedidos internos — TI, compras e reembolso
 // ----------------------------------------------------------------------------
 // Cada pessoa vê só os próprios pedidos; administradores veem e tratam todos
 // (a RLS garante isso no banco). Comprovantes ficam no bucket privado
 // "requests" e abrem por link temporário.
 
-const REQUEST_KIND_LABELS = { ti: "TI", compras: "Compras", reembolso: "Reembolso", abono: "Abono de falta" };
+const REQUEST_KIND_LABELS = { ti: "TI", compras: "Compras", reembolso: "Reembolso" };
 const REQUEST_STATUS_LABELS = { pending: "Pendente", approved: "Aprovado", rejected: "Recusado", done: "Concluído" };
 const REQUEST_STATUS_CLASSES = {
   pending: "bg-amber-100 text-amber-800",
@@ -2930,17 +2913,15 @@ function formatMoneyBRL(value) {
   return Number(value).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
-function requestKindClass(kind) {
-  return kind === "abono" ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-brand-slate";
+function requestKindClass() {
+  return "bg-slate-100 text-brand-slate";
 }
 
 function updateRequestFormFields() {
   const kind = document.getElementById("req-kind").value;
   const amountWrap = document.getElementById("req-amount-wrap");
-  const datesWrap = document.getElementById("req-dates-wrap");
   const amountInput = document.getElementById("req-amount");
   amountWrap.classList.toggle("hidden", kind !== "reembolso" && kind !== "compras");
-  datesWrap.classList.toggle("hidden", kind !== "abono");
   amountInput.placeholder = kind === "reembolso" ? "Valor do reembolso (R$)" : "Valor estimado (R$, opcional)";
   document.getElementById("req-file-label").textContent =
     kind === "reembolso" ? "Comprovante (PDF ou imagem, até 10 MB)" : "Anexo opcional (PDF ou imagem, até 10 MB)";
@@ -2999,8 +2980,6 @@ async function submitRequest() {
   const title = document.getElementById("req-title").value.trim();
   const description = document.getElementById("req-description").value.trim();
   const amountText = document.getElementById("req-amount").value.trim();
-  const startDate = document.getElementById("req-start").value;
-  const endDate = document.getElementById("req-end").value;
   const file = document.getElementById("req-file").files[0];
 
   if (!title) return showError("Preencha o assunto do pedido.");
@@ -3012,14 +2991,6 @@ async function submitRequest() {
     } else if (kind === "reembolso") {
       return showError("Informe o valor do reembolso.");
     }
-  }
-  let start = null;
-  let end = null;
-  if (kind === "abono") {
-    if (!startDate) return showError("Informe a data do abono.");
-    if (endDate && endDate < startDate) return showError("A data final não pode ser anterior à inicial.");
-    start = startDate;
-    end = endDate || null;
   }
   if (file) {
     if (!REQUEST_ALLOWED_TYPES.includes(file.type)) return showError("Anexe um PDF ou uma imagem (JPG, PNG ou WebP).");
@@ -3051,8 +3022,6 @@ async function submitRequest() {
     title,
     description: description || null,
     amount,
-    start_date: start,
-    end_date: end,
     attachment_path: attachmentPath,
     attachment_name: file ? file.name.slice(0, 255) : null,
     user_id: currentUser.id,
@@ -3068,8 +3037,6 @@ async function submitRequest() {
   document.getElementById("req-title").value = "";
   document.getElementById("req-description").value = "";
   document.getElementById("req-amount").value = "";
-  document.getElementById("req-start").value = "";
-  document.getElementById("req-end").value = "";
   document.getElementById("req-file").value = "";
   restore();
   if (requestsScope === "all" && requestsStatusFilter !== "pending" && requestsStatusFilter !== "all") {
@@ -3087,26 +3054,12 @@ async function submitRequest() {
   }
 }
 
-function requestPeriodText(r) {
-  if (!r.start_date) return "";
-  const end = r.end_date || r.start_date;
-  const days = countBusinessDays(r.start_date, end);
-  const range =
-    end === r.start_date
-      ? formatDateBR(r.start_date)
-      : `${formatDateBR(r.start_date)} a ${formatDateBR(end)}`;
-  return `${range} (${formatBusinessDays(days)})`;
-}
-
 function buildRequestCard(r) {
   const isAdmin = !!currentProfile?.is_admin;
   const mine = r.user_id === currentUser.id;
   const showWho = requestsScope === "all" && isAdmin;
   const who = r.requester?.full_name || r.requester?.email || "";
-  const details = [
-    r.amount != null ? formatMoneyBRL(r.amount) : "",
-    requestPeriodText(r),
-  ].filter(Boolean);
+  const details = [r.amount != null ? formatMoneyBRL(r.amount) : ""].filter(Boolean);
   const decider = r.decider?.full_name || r.decider?.email || "";
   const decisionLine =
     r.status !== "pending" && r.decided_at
