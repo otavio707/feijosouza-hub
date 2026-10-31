@@ -196,7 +196,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9z"/><path d="M7 5.5H5.5a1 1 0 0 0-1 1V20a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1V6.5a1 1 0 0 0-1-1H17"/><path d="M8 12h8M8 16h5"/></svg>
             </span>
             <span class="tile-title">Pedidos internos</span>
-            <span class="tile-desc">TI, compras, reembolso e abono de falta</span>
+            <span class="tile-desc">TI, compras e reembolso</span>
           </button>
 
           <button type="button" class="tile" data-goto="birthdays">
@@ -454,12 +454,10 @@
         <p id="teamcal-range" class="text-sm text-brand-slate mb-3"></p>
 
         <div id="teamcal-table" class="card !p-0 overflow-x-auto mb-3"></div>
-        <p id="teamcal-note" class="hidden text-sm text-amber-700 mb-3"></p>
 
         <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-brand-slate mb-8">
           <span><span class="inline-block rounded-md px-2 py-0.5 bg-amber-100 text-amber-800">Férias</span></span>
           <span><span class="inline-block rounded-md px-2 py-0.5 bg-amber-50 text-amber-700 border border-dashed border-amber-300">Férias (pendente)</span> ainda não aprovadas</span>
-          <span><span class="inline-block rounded-md px-2 py-0.5 bg-rose-100 text-rose-700">Abono</span></span>
           <span><span class="inline-block rounded-md px-2 py-0.5 bg-sky-100 text-sky-800">Home office</span></span>
         </div>
 
@@ -482,19 +480,10 @@
               <option value="ti">TI</option>
               <option value="compras">Compras</option>
               <option value="reembolso">Reembolso</option>
-              <option value="abono">Abono de falta</option>
             </select>
             <input id="req-title" type="text" maxlength="200" placeholder="Assunto" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
             <div id="req-amount-wrap" class="hidden">
               <input id="req-amount" type="text" inputmode="decimal" maxlength="14" placeholder="Valor (R$)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full" />
-            </div>
-            <div id="req-dates-wrap" class="hidden grid grid-cols-2 gap-3 sm:col-span-2">
-              <label class="text-xs text-brand-slate">Data do abono
-                <input id="req-start" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mt-1" />
-              </label>
-              <label class="text-xs text-brand-slate">Até (se for mais de um dia)
-                <input id="req-end" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mt-1" />
-              </label>
             </div>
           </div>
           <textarea id="req-description" rows="3" maxlength="5000" placeholder="Detalhes do pedido" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mt-3"></textarea>
@@ -522,7 +511,6 @@
             <option value="ti">TI</option>
             <option value="compras">Compras</option>
             <option value="reembolso">Reembolso</option>
-            <option value="abono">Abono de falta</option>
           </select>
         </div>
 
