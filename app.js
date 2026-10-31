@@ -93,7 +93,6 @@ async function enterApp(user) {
     loadInternSchedule(),
     loadManuals(),
     loadStudies(),
-    loadWorkAnniversaries(),
     loadRequestsHome(),
     loadProfileTab(),
   ]);
@@ -3259,76 +3258,51 @@ async function loadRequestsHome() {
 }
 
 // ----------------------------------------------------------------------------
-// Anos de casa — quem completa aniversário de admissão neste mês
+// Tempo de casa — aparece só no perfil de cada pessoa (e chega por e-mail aos
+// administradores no dia do aniversário de casa; ver a função work-anniversary-email).
 // ----------------------------------------------------------------------------
-// Vem da função segura work_anniversaries (nome, data e anos completos), pois
-// a ficha do funcionário (employee_profile_details) é restrita.
 
-async function loadWorkAnniversaries() {
-  try {
-    const now = new Date();
-    const first = toISODate(new Date(now.getFullYear(), now.getMonth(), 1));
-    const last = toISODate(new Date(now.getFullYear(), now.getMonth() + 1, 0));
-    const { data, error } = await sb.rpc("work_anniversaries", { d_from: first, d_to: last });
-    if (error) throw error;
-    renderWorkAnniversaries(data || [], toISODate(now), now);
-  } catch (e) {
-    console.error("Anos de casa:", e);
-    renderWorkAnniversaries([], toISODate(new Date()), new Date());
-  }
+function tenureParts(hireIso, todayIso) {
+  const [hy, hm, hd] = hireIso.split("-").map(Number);
+  const [ty, tm, td] = todayIso.split("-").map(Number);
+  let months = (ty - hy) * 12 + (tm - hm);
+  if (td < hd) months -= 1;
+  if (months < 0) return null;
+  return { years: Math.floor(months / 12), months: months % 12 };
 }
 
-function renderWorkAnniversaries(items, todayIso, now) {
-  const card = document.getElementById("summary-anniv-card");
-  const section = document.getElementById("anniversaries-section");
-  const list = document.getElementById("anniversaries-list");
-  const monthName = now.toLocaleDateString("pt-BR", { month: "long" });
-
-  if (!items.length) {
-    if (card) card.classList.add("hidden");
-    if (section) section.classList.add("hidden");
+function renderTenure(hireIso) {
+  const el = document.getElementById("profile-tenure-sub");
+  if (!el) return;
+  el.style.whiteSpace = "pre-line";
+  const todayIso = toISODate(new Date());
+  const t = hireIso && hireIso <= todayIso ? tenureParts(hireIso, todayIso) : null;
+  if (!t) {
+    el.textContent = "";
     return;
   }
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const parts = [];
+  if (t.years) parts.push(plural(t.years, "ano", "anos"));
+  if (t.months) parts.push(plural(t.months, "mês", "meses"));
+  const tenure = parts.length ? `${parts.join(" e ")} de casa` : "Menos de 1 mês de casa";
 
-  const sorted = [...items].sort((a, b) => a.anniversary.localeCompare(b.anniversary));
-  const yearsText = (n) => `${n} ${n === 1 ? "ano" : "anos"} de casa`;
-  const dayText = (it) => (it.anniversary === todayIso ? "hoje" : formatDateBR(it.anniversary).slice(0, 5));
-
-  if (card) {
-    const firstNames = sorted.map((it) => (it.full_name || "").trim().split(/\s+/)[0]).filter(Boolean);
-    const joined =
-      firstNames.length <= 1
-        ? firstNames[0] || ""
-        : firstNames.slice(0, -1).join(", ") + " e " + firstNames[firstNames.length - 1];
-    document.getElementById("summary-anniv-label").textContent = `Anos de casa · ${monthName}`;
-    document.getElementById("summary-anniv-names").textContent = joined;
-    document.getElementById("summary-anniv-sub").textContent = sorted
-      .map((it) => `${(it.full_name || "").trim().split(/\s+/)[0]}: ${yearsText(it.years)} (${dayText(it)})`)
-      .join(" · ");
-    card.classList.remove("hidden");
+  let k = 1;
+  let next = addMonthsISO(hireIso, 12 * k);
+  while (next < todayIso) {
+    k += 1;
+    next = addMonthsISO(hireIso, 12 * k);
   }
-
-  if (section && list) {
-    document.getElementById("anniversaries-title").textContent = `Anos de casa em ${monthName}`;
-    list.innerHTML = "";
-    sorted.forEach((it) => {
-      const row = document.createElement("div");
-      row.className = "flex items-center justify-between p-4";
-      const badge =
-        it.anniversary === todayIso
-          ? `<span class="text-sm bg-amber-100 text-amber-700 rounded-full px-3 py-1">Hoje!</span>`
-          : `<span class="text-sm text-slate-400">${escapeHtml(formatDateBR(it.anniversary).slice(0, 5))}</span>`;
-      row.innerHTML = `
-        <div>
-          <p class="font-medium">${escapeHtml(it.full_name)}</p>
-          <p class="text-sm text-slate-500">${escapeHtml(yearsText(it.years))}</p>
-        </div>
-        ${badge}
-      `;
-      list.appendChild(row);
-    });
-    section.classList.remove("hidden");
+  let nextText;
+  if (next === todayIso) {
+    nextText = `Hoje você completa ${plural(k, "ano", "anos")} de casa!`;
+  } else {
+    const [ny, nm, nd] = next.split("-").map(Number);
+    const [cy, cm, cd] = todayIso.split("-").map(Number);
+    const days = Math.round((new Date(ny, nm - 1, nd) - new Date(cy, cm - 1, cd)) / 86400000);
+    nextText = `Próximo aniversário de casa: ${formatDateBR(next)} (${plural(k, "ano", "anos")}, em ${plural(days, "dia", "dias")})`;
   }
+  el.textContent = `${tenure}\n${nextText}`;
 }
 
 // ----------------------------------------------------------------------------
@@ -3462,6 +3436,7 @@ async function loadProfileTab() {
   document.getElementById("profile-hire-date").textContent = myDetails?.hire_date
     ? formatDateBR(myDetails.hire_date)
     : "—";
+  renderTenure(myDetails?.hire_date);
 
   const resolvedBalance = resolveVacationBalance(myDetails, myVacations || []);
   document.getElementById("profile-vacation-balance").textContent = formatVacationBalance(resolvedBalance.value);
