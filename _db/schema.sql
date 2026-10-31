@@ -1039,3 +1039,211 @@ drop index if exists public.internal_requests_absence_idx;
 alter table public.internal_requests drop constraint if exists internal_requests_kind_check;
 alter table public.internal_requests
   add constraint internal_requests_kind_check check (kind in ('ti', 'compras', 'reembolso'));
+
+-- ----------------------------------------------------------------------------
+-- 26. COMERCIAL (CRM) — leads, propostas, histórico, scripts e metas
+-- ----------------------------------------------------------------------------
+-- Tudo aqui é visível e editável SOMENTE por administradores (is_admin) — as
+-- políticas de RLS abaixo são a trava real; esconder o botão no app é só
+-- conveniência. Nenhuma tabela é exposta ao papel "anon".
+-- As propostas enviadas ficam no bucket PRIVADO "crm" (só administradores).
+-- (Depois de 30/10/2026 tabelas novas precisam de GRANT explícito; ver seção 20.)
+
+-- Leads (mesmos campos da planilha CRM_FSA, mais "trilha" e "motivo da recusa").
+create table if not exists public.crm_leads (
+  id bigint generated always as identity primary key,
+  company text not null check (char_length(company) between 1 and 200),
+  contact_name text check (contact_name is null or char_length(contact_name) <= 200),
+  contact_info text check (contact_info is null or char_length(contact_info) <= 1000),
+  city text check (city is null or char_length(city) <= 120),
+  source text check (source is null or char_length(source) <= 80),
+  sector text check (sector is null or char_length(sector) <= 80),
+  product text check (product is null or char_length(product) <= 120),
+  track text check (track is null or track in ('urgente', 'consultivo')),
+  stage text not null default 'Lead Gerado' check (stage in (
+    'Lead Gerado', 'Tentativa de Contato', 'Lead qualificado', 'Agendamento',
+    'Diagnóstico realizado', 'Proposta enviada', 'Contrato fechado', 'Atendimento recusado'
+  )),
+  created_on date not null default current_date,
+  meeting_date date,
+  closed_date date,
+  value numeric(12, 2) check (value is null or (value >= 0 and value < 100000000)),
+  owner_id uuid references public.profiles (id) on delete set null,
+  follow_up_date date,
+  last_update text check (last_update is null or char_length(last_update) <= 1000),
+  notes text check (notes is null or char_length(notes) <= 5000),
+  lost_reason text check (lost_reason is null or char_length(lost_reason) <= 120),
+  created_by uuid default auth.uid() references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists crm_leads_stage_idx on public.crm_leads (stage);
+create index if not exists crm_leads_followup_idx on public.crm_leads (follow_up_date) where follow_up_date is not null;
+create index if not exists crm_leads_owner_idx on public.crm_leads (owner_id);
+
+-- Propostas enviadas (várias por lead, cada uma com valor, data, situação e arquivo).
+create table if not exists public.crm_proposals (
+  id bigint generated always as identity primary key,
+  lead_id bigint not null references public.crm_leads (id) on delete cascade,
+  title text not null check (char_length(title) between 1 and 200),
+  fee_type text check (fee_type is null or fee_type in ('pontual', 'mensal', 'exito', 'misto')),
+  value numeric(12, 2) not null check (value > 0 and value < 100000000),
+  sent_on date not null default current_date,
+  status text not null default 'enviada' check (status in ('enviada', 'aceita', 'recusada')),
+  notes text check (notes is null or char_length(notes) <= 2000),
+  attachment_path text,
+  attachment_name text check (attachment_name is null or char_length(attachment_name) <= 255),
+  created_by uuid default auth.uid() references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists crm_proposals_lead_idx on public.crm_proposals (lead_id, sent_on desc);
+
+-- Histórico de etapas (preenchido por gatilho; ninguém precisa enviar nada).
+create table if not exists public.crm_stage_log (
+  id bigint generated always as identity primary key,
+  lead_id bigint not null references public.crm_leads (id) on delete cascade,
+  from_stage text,
+  to_stage text not null,
+  changed_by uuid default auth.uid() references public.profiles (id) on delete set null,
+  changed_at timestamptz not null default now()
+);
+
+create index if not exists crm_stage_log_lead_idx on public.crm_stage_log (lead_id, changed_at desc);
+
+-- Scripts de mensagem (abertura, ligação, transição, pós-venda).
+create table if not exists public.crm_scripts (
+  id bigint generated always as identity primary key,
+  category text not null check (category in ('abertura', 'ligacao', 'transicao', 'posvenda')),
+  title text not null check (char_length(title) between 1 and 200),
+  body text not null default '' check (char_length(body) <= 5000),
+  sort_order int not null default 0,
+  created_by uuid default auth.uid() references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+-- Configurações do comercial (hoje: as metas). Um registro por chave.
+create table if not exists public.crm_settings (
+  key text primary key check (char_length(key) <= 60),
+  value jsonb not null,
+  updated_by uuid default auth.uid() references public.profiles (id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+
+-- Antes de gravar: carimba "atualizado em" e preenche a data de fechamento quando
+-- o lead vira "Contrato fechado" sem data.
+create or replace function public.crm_leads_before_write()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.updated_at := now();
+  if new.stage = 'Contrato fechado' and new.closed_date is null then
+    new.closed_date := current_date;
+  end if;
+  return new;
+end;
+$$;
+
+-- Depois de gravar: registra a mudança de etapa no histórico.
+create or replace function public.crm_leads_log_stage()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if tg_op = 'INSERT' then
+    insert into public.crm_stage_log (lead_id, from_stage, to_stage) values (new.id, null, new.stage);
+  elsif new.stage is distinct from old.stage then
+    insert into public.crm_stage_log (lead_id, from_stage, to_stage) values (new.id, old.stage, new.stage);
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists trg_crm_leads_before_write on public.crm_leads;
+create trigger trg_crm_leads_before_write
+  before insert or update on public.crm_leads
+  for each row execute function public.crm_leads_before_write();
+
+drop trigger if exists trg_crm_leads_log_stage on public.crm_leads;
+create trigger trg_crm_leads_log_stage
+  after insert or update on public.crm_leads
+  for each row execute function public.crm_leads_log_stage();
+
+revoke execute on function public.crm_leads_before_write() from public, anon, authenticated;
+revoke execute on function public.crm_leads_log_stage() from public, anon, authenticated;
+
+-- RLS: somente administradores, em todas as operações.
+alter table public.crm_leads enable row level security;
+alter table public.crm_proposals enable row level security;
+alter table public.crm_stage_log enable row level security;
+alter table public.crm_scripts enable row level security;
+alter table public.crm_settings enable row level security;
+
+drop policy if exists "crm_leads_admin_all" on public.crm_leads;
+create policy "crm_leads_admin_all" on public.crm_leads for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+drop policy if exists "crm_proposals_admin_all" on public.crm_proposals;
+create policy "crm_proposals_admin_all" on public.crm_proposals for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+drop policy if exists "crm_scripts_admin_all" on public.crm_scripts;
+create policy "crm_scripts_admin_all" on public.crm_scripts for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+drop policy if exists "crm_settings_admin_all" on public.crm_settings;
+create policy "crm_settings_admin_all" on public.crm_settings for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+-- O histórico é só leitura pelo app (o gatilho é quem escreve).
+drop policy if exists "crm_stage_log_admin_select" on public.crm_stage_log;
+create policy "crm_stage_log_admin_select" on public.crm_stage_log for select to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+grant select, insert, update, delete on table public.crm_leads, public.crm_proposals,
+  public.crm_scripts, public.crm_settings to authenticated;
+grant select on table public.crm_stage_log to authenticated;
+grant all on table public.crm_leads, public.crm_proposals, public.crm_stage_log,
+  public.crm_scripts, public.crm_settings to service_role;
+revoke all on table public.crm_leads, public.crm_proposals, public.crm_stage_log,
+  public.crm_scripts, public.crm_settings from anon;
+
+-- Bucket privado das propostas: até 20 MB; PDF, Word e imagens.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'crm', 'crm', false, 20971520,
+  array[
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'image/jpeg', 'image/png', 'image/webp'
+  ]
+)
+on conflict (id) do nothing;
+
+drop policy if exists "crm_bucket_admin_select" on storage.objects;
+create policy "crm_bucket_admin_select" on storage.objects for select to authenticated
+  using (bucket_id = 'crm' and exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+drop policy if exists "crm_bucket_admin_insert" on storage.objects;
+create policy "crm_bucket_admin_insert" on storage.objects for insert to authenticated
+  with check (bucket_id = 'crm' and exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+drop policy if exists "crm_bucket_admin_delete" on storage.objects;
+create policy "crm_bucket_admin_delete" on storage.objects for delete to authenticated
+  using (bucket_id = 'crm' and exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+-- Metas iniciais (as da planilha: faturamento e novos clientes por mês; novos
+-- leads e novas reuniões por semana).
+insert into public.crm_settings (key, value)
+values ('goals', '{"revenue_month": 170000, "clients_month": 4, "leads_week": 15, "meetings_week": 4}'::jsonb)
+on conflict (key) do nothing;
