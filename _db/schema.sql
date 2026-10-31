@@ -1247,3 +1247,47 @@ create policy "crm_bucket_admin_delete" on storage.objects for delete to authent
 insert into public.crm_settings (key, value)
 values ('goals', '{"revenue_month": 170000, "clients_month": 4, "leads_week": 15, "meetings_week": 4}'::jsonb)
 on conflict (key) do nothing;
+
+-- ----------------------------------------------------------------------------
+-- 27. ANOS DE CASA — e-mail diário para os administradores
+-- ----------------------------------------------------------------------------
+-- Os anos de casa deixaram de aparecer para a equipe toda (tela inicial e aba
+-- Aniversários). Cada pessoa vê o próprio tempo de casa em "Meu perfil" e os
+-- administradores recebem um e-mail no dia do aniversário de casa, enviado pela
+-- Edge Function "work-anniversary-email" (Microsoft Graph, mesmas credenciais do
+-- Azure da função notify-announcement). Código da função: _db/work-anniversary-email.ts.
+
+-- Registro de quem já gerou e-mail em cada data (evita e-mail em duplicidade).
+create table if not exists public.anniversary_email_log (
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  anniversary date not null,
+  sent_at timestamptz not null default now(),
+  primary key (user_id, anniversary)
+);
+
+alter table public.anniversary_email_log enable row level security;
+-- Sem políticas de propósito: só a Edge Function (service_role) acessa.
+revoke all on table public.anniversary_email_log from anon, authenticated;
+grant select, insert, delete on table public.anniversary_email_log to service_role;
+
+-- work_anniversaries passa a ser chamável só pela Edge Function: antes qualquer
+-- pessoa logada podia consultar os anos de casa da equipe pelo app.
+revoke execute on function public.work_anniversaries(date, date) from authenticated;
+
+-- Agendamento: todo dia às 11:00 UTC (8h em Brasília) chama a função, que só
+-- envia e-mail quando há aniversário de casa no dia. A função fica com "Verify
+-- JWT" desligado (o projeto usa chaves publishable); ela é idempotente, só
+-- escreve para administradores e responde apenas com contagens.
+create extension if not exists pg_cron;
+
+select cron.schedule(
+  'work-anniversary-email',
+  '0 11 * * *',
+  $cron$
+  select net.http_post(
+    url := 'https://xxielcplccjklkmyqbxx.supabase.co/functions/v1/work-anniversary-email',
+    headers := jsonb_build_object('Content-Type', 'application/json'),
+    body := '{}'::jsonb
+  );
+  $cron$
+);
