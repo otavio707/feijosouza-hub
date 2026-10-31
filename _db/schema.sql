@@ -1025,3 +1025,17 @@ grant execute on function public.work_anniversaries(date, date) to authenticated
 revoke all on table public.internal_requests from anon;
 alter default privileges in schema public revoke all on tables from anon;
 alter default privileges in schema public revoke all on sequences from anon;
+
+-- ----------------------------------------------------------------------------
+-- 25. REMOÇÃO DO ABONO DE FALTA DOS PEDIDOS INTERNOS
+-- ----------------------------------------------------------------------------
+-- Os pedidos passam a ter apenas TI, compras e reembolso. Substitui a função
+-- team_absences (seção 23) e o tipo "abono" da seção 22. As colunas start_date e
+-- end_date continuam na tabela, sem uso. Aplicado em produção após conferir que
+-- não havia pedidos do tipo abono.
+
+drop function if exists public.team_absences(date, date);
+drop index if exists public.internal_requests_absence_idx;
+alter table public.internal_requests drop constraint if exists internal_requests_kind_check;
+alter table public.internal_requests
+  add constraint internal_requests_kind_check check (kind in ('ti', 'compras', 'reembolso'));
