@@ -1291,3 +1291,84 @@ select cron.schedule(
   );
   $cron$
 );
+
+-- ----------------------------------------------------------------------------
+-- 28. DESLIGAMENTO DE PESSOAS — marcador "desligada em" (histórico preservado)
+-- ----------------------------------------------------------------------------
+-- Quando alguém sai do escritório NADA é apagado: férias, feedbacks e ficha
+-- ficam guardados. O marcador profiles.left_at (data do desligamento) faz o app
+-- esconder a pessoa das listas, calendários, aniversários e e-mails, e a função
+-- work_anniversaries deixa de considerá-la. O login é bloqueado à parte, em
+-- Supabase > Authentication > Users > "Ban user". Para reativar: left_at = null
+-- e remover o bloqueio.
+--
+-- Para desligar outra pessoa no futuro:
+--   update public.profiles set left_at = 'AAAA-MM-DD' where email = '...';
+-- e bloquear o login dela no painel do Supabase.
+
+alter table public.profiles add column if not exists left_at date;
+
+-- Só administrador (ou o SQL Editor / service_role) altera left_at.
+create or replace function public.protect_profile_left_at()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.left_at is distinct from old.left_at
+     and auth.uid() is not null
+     and not exists (select 1 from public.profiles a where a.id = auth.uid() and a.is_admin) then
+    raise exception 'Somente administradores podem alterar a data de desligamento.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists protect_profile_left_at on public.profiles;
+create trigger protect_profile_left_at
+  before update on public.profiles
+  for each row execute function public.protect_profile_left_at();
+
+-- Aniversários de casa: ignora quem já foi desligado.
+create or replace function public.work_anniversaries(d_from date, d_to date)
+returns table (user_id uuid, full_name text, anniversary date, years int)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    p.id,
+    coalesce(nullif(p.full_name, ''), split_part(p.email, '@', 1)),
+    a.anniv,
+    y.yr - extract(year from d.hire_date)::int
+  from public.employee_profile_details d
+  join public.profiles p on p.id = d.user_id
+  cross join lateral generate_series(extract(year from d_from)::int, extract(year from d_to)::int) as y(yr)
+  cross join lateral (
+    select make_date(
+      y.yr,
+      extract(month from d.hire_date)::int,
+      least(
+        extract(day from d.hire_date)::int,
+        extract(day from (date_trunc('month', make_date(y.yr, extract(month from d.hire_date)::int, 1))
+                          + interval '1 month - 1 day'))::int
+      )
+    ) as anniv
+  ) a
+  where d.hire_date is not null
+    and p.left_at is null
+    and y.yr > extract(year from d.hire_date)::int
+    and a.anniv between d_from and d_to
+  order by a.anniv, 2
+$$;
+
+revoke all on function public.work_anniversaries(date, date) from public, anon, authenticated;
+grant execute on function public.work_anniversaries(date, date) to service_role;
+
+-- Victória Seletti: desligada em 03/11/2026.
+update public.profiles
+   set left_at = '2026-11-03'
+ where id = 'a623df1f-19c3-46a5-9067-5681b615f0fa'
+   and email = 'victoria.selleti@feijosouza.com.br';
