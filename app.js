@@ -75,6 +75,14 @@ async function enterApp(user) {
   document.getElementById("app-screen").classList.remove("hidden");
 
   currentProfile = await ensureProfileLoaded(user);
+  // Pessoa desligada do escritório: sem acesso (o login também é bloqueado no Supabase).
+  if (currentProfile?.left_at) {
+    await sb.auth.signOut();
+    document.getElementById("app-screen").classList.add("hidden");
+    document.getElementById("login-screen").classList.remove("hidden");
+    showLoginError("Este acesso foi encerrado. Em caso de dúvida, fale com a administração.");
+    return;
+  }
   if (currentProfile?.is_admin && window.setupCrmTile) window.setupCrmTile();
 
   document.getElementById("welcome-msg").textContent =
@@ -573,15 +581,16 @@ async function loadDashboardSummary() {
 
   const [{ data: profiles }, { data: entries }, { data: birthProfiles }, { data: announcements }, { data: vacations }] =
     await Promise.all([
-      sb.from("profiles").select("id, full_name, email"),
+      sb.from("profiles").select("id, full_name, email").is("left_at", null),
       sb.from("homeoffice_entries").select("user_id, period").eq("entry_date", todayISO),
-      sb.from("profiles").select("full_name, email, birth_date").not("birth_date", "is", null),
+      sb.from("profiles").select("full_name, email, birth_date").not("birth_date", "is", null).is("left_at", null),
       sb.from("announcements").select("title, body, created_at").order("created_at", { ascending: false }).limit(1),
       // Próxima (ou atual) férias de qualquer pessoa da equipe: qualquer período
       // que ainda não tenha terminado, o mais próximo de começar primeiro.
       sb
         .from("vacations")
-        .select("user_id, start_date, end_date, status, profiles!user_id(full_name, email)")
+        .select("user_id, start_date, end_date, status, profiles!user_id!inner(full_name, email)")
+        .is("profiles.left_at", null)
         .neq("status", "rejected")
         .gte("end_date", todayISO)
         .order("start_date", { ascending: true })
@@ -671,7 +680,7 @@ async function loadHomeOffice() {
   updateHomeOfficeWeekNav();
 
   const [{ data: profiles }, { data: entries }] = await Promise.all([
-    sb.from("profiles").select("id, full_name, email").order("full_name"),
+    sb.from("profiles").select("id, full_name, email").is("left_at", null).order("full_name"),
     sb.from("homeoffice_entries").select("user_id, entry_date, period, created_at").in("entry_date", isoDates),
   ]);
 
@@ -916,7 +925,8 @@ async function loadBirthdays() {
   const { data: profiles, error } = await sb
     .from("profiles")
     .select("id, full_name, email, birth_date")
-    .not("birth_date", "is", null);
+    .not("birth_date", "is", null)
+    .is("left_at", null);
 
   const list = document.getElementById("birthdays-list");
 
@@ -1239,7 +1249,8 @@ async function renderVacationsList() {
 
   const { data: vacations, error } = await sb
     .from("vacations")
-    .select("id, user_id, start_date, end_date, status, profiles!user_id(full_name, email)")
+    .select("id, user_id, start_date, end_date, status, profiles!user_id!inner(full_name, email)")
+    .is("profiles.left_at", null)
     .order("start_date");
 
   if (error) {
@@ -1437,7 +1448,7 @@ async function renderVacationBalancesPanel() {
   box.classList.remove("hidden");
 
   const [{ data: profiles, error: profilesError }, { data: details }, { data: vacs }] = await Promise.all([
-    sb.from("profiles").select("id, full_name, email").order("full_name"),
+    sb.from("profiles").select("id, full_name, email").is("left_at", null).order("full_name"),
     sb.from("employee_profile_details").select("user_id, hire_date, vacation_balance_days"),
     sb.from("vacations").select("user_id, start_date, end_date, status"),
   ]);
@@ -2150,7 +2161,7 @@ function setupStudyControls() {
 
 async function ensureStudyPeople() {
   if (studyPeople) return studyPeople;
-  const { data } = await sb.from("profiles").select("id, full_name, email").order("full_name");
+  const { data } = await sb.from("profiles").select("id, full_name, email").is("left_at", null).order("full_name");
   studyPeople = data || [];
   const select = document.getElementById("study-presenter");
   if (select) {
@@ -2682,7 +2693,7 @@ function teamCalGroupBy(rows) {
 
 async function fetchTeamCalendarData(startIso, endIso, homeIsos) {
   const [profilesRes, vacRes, hoRes] = await Promise.all([
-    sb.from("profiles").select("id, full_name, email").order("full_name"),
+    sb.from("profiles").select("id, full_name, email").is("left_at", null).order("full_name"),
     sb
       .from("vacations")
       .select("user_id, start_date, end_date, status")
@@ -3464,13 +3475,14 @@ async function loadProfileTab() {
   }
   adminBox.classList.remove("hidden");
 
-  const { data: allProfiles } = await sb.from("profiles").select("id, full_name, email").order("full_name");
+  // O administrador enxerga também quem foi desligado (histórico preservado), com a marcação.
+  const { data: allProfiles } = await sb.from("profiles").select("id, full_name, email, left_at").order("full_name");
   const select = document.getElementById("profile-editor-select");
   const previousSelection = select.value;
   select.innerHTML =
     `<option value="">Selecione...</option>` +
     (allProfiles || [])
-      .map((p) => `<option value="${p.id}">${escapeHtml(p.full_name || p.email)}</option>`)
+      .map((p) => `<option value="${p.id}">${escapeHtml(p.full_name || p.email)}${p.left_at ? " (desligado(a) em " + escapeHtml(formatDateBR(p.left_at)) + ")" : ""}</option>`)
       .join("");
   select.value = previousSelection;
   select.onchange = () => loadProfileEditorFor(select.value || null);
