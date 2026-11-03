@@ -3389,13 +3389,14 @@ async function attachFeedbackAuthors(entries) {
   return entries.map((f) => ({ ...f, authorName: f.created_by ? nameById.get(f.created_by) || null : null }));
 }
 
-function renderFeedbackList(container, entries, { withRemove = false } = {}) {
+function renderFeedbackList(container, entries, { withRemove = false, canRemove = null, onRemoved = null } = {}) {
   if (!entries || entries.length === 0) {
     container.innerHTML = `<p class="p-4 text-sm text-slate-400">Nenhum feedback registrado ainda.</p>`;
     return;
   }
   container.innerHTML = "";
   entries.forEach((f) => {
+    const showRemove = withRemove && (!canRemove || canRemove(f));
     const row = document.createElement("div");
     row.className = "p-4";
     row.innerHTML = `
@@ -3405,14 +3406,18 @@ function renderFeedbackList(container, entries, { withRemove = false } = {}) {
           <p class="text-sm whitespace-pre-line">${escapeHtml(f.body)}</p>
           <p class="text-xs text-brand-mist mt-1">${formatDateTimeBR(f.created_at)}${f.authorName ? ` · por ${escapeHtml(f.authorName)}` : ""}</p>
         </div>
-        ${withRemove ? `<button type="button" class="text-sm text-red-500 hover:underline shrink-0" data-remove-feedback>Remover</button>` : ""}
+        ${showRemove ? `<button type="button" class="text-sm text-red-500 hover:underline shrink-0" data-remove-feedback>Remover</button>` : ""}
       </div>
     `;
-    if (withRemove) {
+    if (showRemove) {
       row.querySelector("[data-remove-feedback]").addEventListener("click", async () => {
         const { error } = await sb.from("feedback_entries").delete().eq("id", f.id);
         if (error) {
           alert("Erro ao remover feedback: " + error.message);
+          return;
+        }
+        if (onRemoved) {
+          await onRemoved();
           return;
         }
         await loadProfileEditorFor(currentEditorUserId);
@@ -3421,6 +3426,119 @@ function renderFeedbackList(container, entries, { withRemove = false } = {}) {
     }
     container.appendChild(row);
   });
+}
+
+// ----------------------------------------------------------------------------
+// Feedback para estagiárias dado por advogados (tabela feedback_givers)
+// ----------------------------------------------------------------------------
+// Quem está na lista de uma pessoa lê todos os feedbacks dela, registra novos em
+// seu próprio nome e remove só os que escreveu (regras no banco, seção 29).
+
+let giverFeedbackScore = 0;
+
+function renderGiverScorePicker() {
+  const container = document.getElementById("giver-feedback-score-picker");
+  if (!container) return;
+  container.innerHTML = "";
+  FEEDBACK_SCORES.forEach((score) => {
+    const c = feedbackScoreColorClasses(score);
+    const isActive = score === giverFeedbackScore;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `w-9 h-9 rounded-full border text-sm font-medium ${c.text} ${c.border} ${isActive ? `${c.bg} ring-2 ring-offset-1 ${c.ring}` : "bg-white"}`;
+    btn.textContent = formatFeedbackScore(score);
+    btn.addEventListener("click", () => {
+      giverFeedbackScore = score;
+      renderGiverScorePicker();
+    });
+    container.appendChild(btn);
+  });
+}
+
+async function loadGiverFeedbackList() {
+  const internId = document.getElementById("giver-feedback-select").value;
+  const list = document.getElementById("giver-feedback-list");
+  if (!internId) {
+    list.innerHTML = "";
+    return;
+  }
+  const { data, error } = await sb
+    .from("feedback_entries")
+    .select("*")
+    .eq("user_id", internId)
+    .order("created_at", { ascending: false });
+  if (error) {
+    list.innerHTML = `<p class="p-4 text-sm text-red-500">Erro ao carregar feedbacks: ${escapeHtml(error.message)}</p>`;
+    return;
+  }
+  renderFeedbackList(list, await attachFeedbackAuthors(data || []), {
+    withRemove: true,
+    canRemove: (f) => f.created_by === currentUser.id,
+    onRemoved: loadGiverFeedbackList,
+  });
+}
+
+async function setupGiverFeedback() {
+  const box = document.getElementById("giver-feedback-box");
+  if (!box) return;
+  // Administradores já têm o editor completo mais abaixo.
+  if (currentProfile?.is_admin) {
+    box.classList.add("hidden");
+    return;
+  }
+  const { data, error } = await sb
+    .from("feedback_givers")
+    .select("intern_id, intern:profiles!intern_id(full_name, email)")
+    .eq("giver_id", currentUser.id);
+  if (error || !data || data.length === 0) {
+    box.classList.add("hidden");
+    return;
+  }
+  const people = data
+    .map((r) => ({ id: r.intern_id, name: r.intern?.full_name || r.intern?.email || "—" }))
+    .sort((x, y) => x.name.localeCompare(y.name, "pt-BR"));
+
+  const select = document.getElementById("giver-feedback-select");
+  const previous = select.value;
+  select.innerHTML = people.map((p) => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join("");
+  if (previous && people.some((p) => p.id === previous)) select.value = previous;
+  select.onchange = loadGiverFeedbackList;
+
+  const errEl = document.getElementById("giver-feedback-error");
+  const dateEl = document.getElementById("giver-feedback-date");
+  const bodyEl = document.getElementById("giver-feedback-body");
+  dateEl.value = toISODate(new Date());
+  giverFeedbackScore = 0;
+  renderGiverScorePicker();
+  errEl.classList.add("hidden");
+
+  document.getElementById("btn-giver-add-feedback").onclick = async () => {
+    errEl.classList.add("hidden");
+    const body = bodyEl.value.trim();
+    const internId = select.value;
+    if (!body || !internId) return;
+    const createdAt = new Date(`${dateEl.value || toISODate(new Date())}T12:00:00`).toISOString();
+    const { error: insErr } = await sb.from("feedback_entries").insert({
+      user_id: internId,
+      body,
+      score: giverFeedbackScore,
+      created_by: currentUser.id,
+      created_at: createdAt,
+    });
+    if (insErr) {
+      errEl.textContent = "Erro ao adicionar feedback: " + insErr.message;
+      errEl.classList.remove("hidden");
+      return;
+    }
+    bodyEl.value = "";
+    giverFeedbackScore = 0;
+    dateEl.value = toISODate(new Date());
+    renderGiverScorePicker();
+    await loadGiverFeedbackList();
+  };
+
+  box.classList.remove("hidden");
+  await loadGiverFeedbackList();
 }
 
 // Decide o saldo de férias a exibir: se houver um valor manual cadastrado em
@@ -3466,6 +3584,7 @@ async function loadProfileTab() {
   }
 
   renderFeedbackList(document.getElementById("profile-feedback-list"), await attachFeedbackAuthors(myFeedback || []));
+  await setupGiverFeedback();
 
   // --- edição por administradores, para qualquer colaborador(a) ---
   const adminBox = document.getElementById("admin-profile-editor-box");

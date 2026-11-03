@@ -596,6 +596,30 @@
           <div id="profile-feedback-list" class="divide-y divide-slate-100 mt-3"></div>
         </div>
 
+        <div id="giver-feedback-box" class="card mb-6 hidden">
+          <p class="text-sm font-medium mb-1">Feedback para estagiárias</p>
+          <p class="text-xs text-brand-slate mb-3">Você pode registrar feedback para as pessoas da lista. Elas veem o texto, a nota e o seu nome. Quem tem essa permissão vê o histórico completo, mas só remove os feedbacks que escreveu.</p>
+          <div class="mb-3">
+            <label class="block text-xs text-brand-slate mb-1">Estagiária</label>
+            <select id="giver-feedback-select" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full sm:w-80"></select>
+          </div>
+          <div class="mb-3">
+            <label class="block text-xs text-brand-slate mb-1">Nota (-3 bem negativo · 0 neutro · +3 bem positivo)</label>
+            <div id="giver-feedback-score-picker" class="flex gap-2 flex-wrap"></div>
+          </div>
+          <div class="mb-3">
+            <label class="block text-xs text-brand-slate mb-1">Data do feedback</label>
+            <input id="giver-feedback-date" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <textarea id="giver-feedback-body" placeholder="Escreva o feedback..." rows="3" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mb-2"></textarea>
+          <button type="button" id="btn-giver-add-feedback" class="btn-primary">Adicionar feedback</button>
+          <p id="giver-feedback-error" class="text-sm text-red-500 mt-2 hidden"></p>
+          <div class="mt-5">
+            <p class="text-sm font-medium mb-2">Histórico</p>
+            <div id="giver-feedback-list" class="divide-y divide-slate-100"></div>
+          </div>
+        </div>
+
         <div id="admin-profile-editor-box" class="card hidden">
           <p class="text-sm font-medium mb-3">Editar perfil de um(a) colaborador(a) (somente administradores)</p>
           <div class="mb-4">
