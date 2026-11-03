@@ -1372,3 +1372,86 @@ update public.profiles
    set left_at = '2026-11-03'
  where id = 'a623df1f-19c3-46a5-9067-5681b615f0fa'
    and email = 'victoria.selleti@feijosouza.com.br';
+
+-- ----------------------------------------------------------------------------
+-- 29. FEEDBACK PARA ESTAGIÁRIAS DADO POR ADVOGADOS — lista "quem pode dar feedback a quem"
+-- ----------------------------------------------------------------------------
+-- Até aqui só administradores criavam e liam feedbacks (feedback_entries). Agora
+-- existe a tabela feedback_givers (giver_id = quem escreve, intern_id = sobre quem).
+-- Quem está na lista para uma pessoa pode, SOMENTE sobre essa pessoa:
+--   * ler todos os feedbacks dela (inclusive os escritos por administradores);
+--   * criar feedback (sempre em seu próprio nome: created_by = auth.uid());
+--   * remover apenas os feedbacks que ela mesma escreveu.
+-- A própria pessoa avaliada continua lendo os feedbacks sobre si (política antiga).
+-- Administradores continuam com acesso total. Quem entra na lista só muda por
+-- administrador (tela do Hub não existe; usar o SQL Editor):
+--   insert into public.feedback_givers (giver_id, intern_id) values ('<id advogado>', '<id estagiária>');
+--   delete from public.feedback_givers where giver_id = '<id>' and intern_id = '<id>';
+
+create table if not exists public.feedback_givers (
+  giver_id uuid not null references public.profiles (id) on delete cascade,
+  intern_id uuid not null references public.profiles (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (giver_id, intern_id),
+  check (giver_id <> intern_id)
+);
+
+alter table public.feedback_givers enable row level security;
+revoke all on table public.feedback_givers from anon, authenticated;
+grant select, insert, update, delete on table public.feedback_givers to authenticated;
+grant all on table public.feedback_givers to service_role;
+
+drop policy if exists "feedback_givers_select" on public.feedback_givers;
+create policy "feedback_givers_select" on public.feedback_givers
+  for select to authenticated
+  using (
+    giver_id = auth.uid()
+    or exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin)
+  );
+
+drop policy if exists "feedback_givers_admin_write" on public.feedback_givers;
+create policy "feedback_givers_admin_write" on public.feedback_givers
+  for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+-- feedback_entries: acrescenta as políticas de quem está na lista.
+drop policy if exists "feedback_givers_read" on public.feedback_entries;
+create policy "feedback_givers_read" on public.feedback_entries
+  for select to authenticated
+  using (exists (
+    select 1 from public.feedback_givers g
+    where g.giver_id = auth.uid() and g.intern_id = feedback_entries.user_id
+  ));
+
+drop policy if exists "feedback_givers_insert" on public.feedback_entries;
+create policy "feedback_givers_insert" on public.feedback_entries
+  for insert to authenticated
+  with check (
+    created_by = auth.uid()
+    and exists (
+      select 1 from public.feedback_givers g
+      where g.giver_id = auth.uid() and g.intern_id = feedback_entries.user_id
+    )
+  );
+
+drop policy if exists "feedback_givers_delete_own" on public.feedback_entries;
+create policy "feedback_givers_delete_own" on public.feedback_entries
+  for delete to authenticated
+  using (
+    created_by = auth.uid()
+    and exists (
+      select 1 from public.feedback_givers g
+      where g.giver_id = auth.uid() and g.intern_id = feedback_entries.user_id
+    )
+  );
+
+-- Liberação inicial: Lian Marcilio, Fernanda Bernardelli e Isabela Leon podem dar
+-- feedback para Luiza Romanelli e Juliana Fontanini.
+insert into public.feedback_givers (giver_id, intern_id)
+select g.id, i.id
+from public.profiles g
+cross join public.profiles i
+where g.email in ('lian.marcilio@feijosouza.com.br', 'fernanda.bernardelli@feijosouza.com.br', 'isabela.leon@feijosouza.com.br')
+  and i.email in ('luiza.romanelli@feijosouza.com.br', 'juliana.fontanini@feijosouza.com.br')
+on conflict do nothing;
