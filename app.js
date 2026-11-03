@@ -251,11 +251,13 @@ function defaultInternRotationStartIso() {
 }
 
 // ----------------------------------------------------------------------------
-// Cálculo automático do rodízio (Sherwood → Licitações → Embraprec + Geral)
+// Cálculo automático do rodízio (Sherwood ⇄ Licitação + Embraprec + Geral)
 // ----------------------------------------------------------------------------
 //
 // Combinado com o escritório: a cada quinzena, cada estagiária avança uma
-// posição nessa sequência fixa, indefinidamente. Antes, uma automação externa
+// posição nessa sequência, indefinidamente. Desde 03/11/2026 são duas
+// estagiárias (Luiza e Juliana) e duas frentes, então elas alternam a cada
+// quinzena: uma fica só com Sherwood e a outra com Licitação + Embraprec + Geral. Antes, uma automação externa
 // precisava "lembrar" de gravar isso na tabela intern_assignments toda
 // quinzena — e quando a sessão usada por ela expirava sem ninguém perceber,
 // o rodízio simplesmente parava de avançar, sem avisar ninguém (foi o que
@@ -263,8 +265,10 @@ function defaultInternRotationStartIso() {
 // só da data de hoje, o Hub sempre mostra o valor certo assim que a tela é
 // aberta — não existe mais nada para "rodar" ou agendar, e portanto nada que
 // possa silenciosamente parar de rodar.
-const INTERN_ROTATION_SEQUENCE = ["Sherwood", "Licitações", "Embraprec + Geral"];
-const INTERN_ROTATION_BASE_POSITION = { Juliana: 0, Victória: 1, Luiza: 2 };
+const INTERN_ROTATION_SEQUENCE = ["Sherwood", "Licitação + Embraprec + Geral"];
+// Quinzena de 26/10/2026 (índice 3): Juliana em Sherwood e Luiza em Licitação +
+// Embraprec + Geral; na de 09/11 elas trocam, e assim por diante.
+const INTERN_ROTATION_BASE_POSITION = { Juliana: 1, Luiza: 0 };
 
 // Dado o início (ISO) de uma quinzena já alinhada ao marco (produzido por
 // internRotationStartForDate, por defaultInternRotationStartIso, ou por soma
@@ -1702,7 +1706,7 @@ async function renderInternsList() {
     return;
   }
 
-  // Uma linha da tabela para uma das três estagiárias fixas do rodízio, na
+  // Uma linha da tabela para uma das estagiárias fixas do rodízio, na
   // quinzena atual ou na próxima, é tratada como uma EXCEÇÃO manual que
   // substitui o valor calculado só para aquela pessoa/quinzena (ex.: uma
   // troca combinada fora do padrão) — nunca como a fonte de verdade
