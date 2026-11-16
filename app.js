@@ -102,6 +102,7 @@ async function enterApp(user) {
     loadManuals(),
     loadStudies(),
     loadRequestsHome(),
+    loadHalfDays(),
     loadProfileTab(),
   ]);
 }
@@ -2677,6 +2678,9 @@ function teamCalPersonDay(uid, iso, ctx) {
   if (vacs.some((v) => v.status === "pending" && teamCalCoversDate(v, iso))) {
     return { kind: "vacation_pending", label: "Férias (pendente)" };
   }
+  if (ctx.halfDays && ctx.halfDays.has(`${uid}|${iso}`)) {
+    return { kind: "half", label: "Meio período (prova)" };
+  }
   const periods = ctx.homeOffice.get(`${uid}|${iso}`);
   if (periods && periods.length) {
     if (isFullDayPeriods(periods)) return { kind: "ho", label: "Home office" };
@@ -2696,7 +2700,7 @@ function teamCalGroupBy(rows) {
 }
 
 async function fetchTeamCalendarData(startIso, endIso, homeIsos) {
-  const [profilesRes, vacRes, hoRes] = await Promise.all([
+  const [profilesRes, vacRes, hoRes, halfRes] = await Promise.all([
     sb.from("profiles").select("id, full_name, email").is("left_at", null).order("full_name"),
     sb
       .from("vacations")
@@ -2705,7 +2709,10 @@ async function fetchTeamCalendarData(startIso, endIso, homeIsos) {
       .lte("start_date", endIso)
       .gte("end_date", startIso),
     sb.from("homeoffice_entries").select("user_id, entry_date, period").in("entry_date", homeIsos),
+    sb.from("intern_half_days").select("user_id, day").in("day", homeIsos),
   ]);
+
+  const halfDays = new Set((halfRes.data || []).map((r) => `${r.user_id}|${r.day}`));
 
   const homeOffice = new Map();
   (hoRes.data || []).forEach((e) => {
@@ -2719,6 +2726,7 @@ async function fetchTeamCalendarData(startIso, endIso, homeIsos) {
     profiles: profilesRes.data || [],
     vacationsByUser: teamCalGroupBy(vacRes.data),
     homeOffice,
+    halfDays,
   };
 }
 
@@ -2731,6 +2739,7 @@ function teamCalCellHtml(info, isHoliday) {
     vacation_pending: "bg-amber-50 text-amber-700 border border-dashed border-amber-300",
     ho: "bg-sky-100 text-sky-800",
     ho_part: "bg-sky-50 text-sky-700",
+    half: "bg-violet-100 text-violet-800",
     office: "text-slate-300",
   };
   const label = info.kind === "office" ? "·" : escapeHtml(info.label);
@@ -3269,6 +3278,158 @@ async function loadRequestsHome() {
     await renderPendingRequestsAlert();
   } catch (e) {
     console.error("Pedidos internos:", e);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Meio período na semana de prova (estagiárias) — Lei 11.788/2008, art. 10, §2º
+// ----------------------------------------------------------------------------
+// A estagiária marca direto os dias em que fará só meia tarde (sem aprovação e
+// sem comprovante). Todos veem no Calendário; quem não é estagiária vê um aviso
+// na tela inicial com os próximos dias (14 dias).
+
+const HALF_DAY_ALERT_DAYS = 14;
+let halfDayReady = false;
+
+function halfDayTodayIso() {
+  return toISODate(new Date());
+}
+
+function halfDayWeekdayLabel(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"][new Date(y, m - 1, d).getDay()];
+}
+
+function setHalfDayMsg(text, isError) {
+  const el = document.getElementById("half-day-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = "text-xs mt-2 " + (isError ? "text-red-500" : "text-brand-slate");
+}
+
+function setupHalfDayControls() {
+  if (halfDayReady) return;
+  halfDayReady = true;
+  const btn = document.getElementById("btn-half-day-add");
+  const input = document.getElementById("half-day-date");
+  if (input) input.min = halfDayTodayIso();
+  if (btn) btn.addEventListener("click", addHalfDay);
+  const list = document.getElementById("half-day-list");
+  if (list) {
+    list.addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-half-remove]");
+      if (b) removeHalfDay(b.getAttribute("data-half-remove"));
+    });
+  }
+}
+
+async function addHalfDay() {
+  const input = document.getElementById("half-day-date");
+  const iso = input?.value || "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    setHalfDayMsg("Escolha a data da prova.", true);
+    return;
+  }
+  if (iso < halfDayTodayIso()) {
+    setHalfDayMsg("Só é possível marcar de hoje em diante.", true);
+    return;
+  }
+  const [y, m, d] = iso.split("-").map(Number);
+  const wd = new Date(y, m - 1, d).getDay();
+  if (wd === 0 || wd === 6) {
+    setHalfDayMsg("Escolha um dia útil (segunda a sexta).", true);
+    return;
+  }
+  if (isHoliday(iso, y)) {
+    setHalfDayMsg("Esse dia é feriado.", true);
+    return;
+  }
+  const { error } = await sb.from("intern_half_days").insert({ user_id: currentUser.id, day: iso });
+  if (error) {
+    setHalfDayMsg(
+      error.code === "23505" ? "Esse dia já está marcado." : "Não foi possível marcar: " + error.message,
+      true
+    );
+    return;
+  }
+  input.value = "";
+  setHalfDayMsg("Meio período marcado para " + formatDateBR(iso) + ". A equipe já pode ver no Calendário.", false);
+  await loadHalfDays();
+}
+
+async function removeHalfDay(id) {
+  if (!id) return;
+  const { error } = await sb.from("intern_half_days").delete().eq("id", id);
+  if (error) {
+    setHalfDayMsg("Não foi possível remover: " + error.message, true);
+    return;
+  }
+  setHalfDayMsg("Marcação removida.", false);
+  await loadHalfDays();
+}
+
+async function loadHalfDays() {
+  try {
+    const isIntern = !!currentProfile?.is_intern;
+    const box = document.getElementById("half-day-box");
+    const alertEl = document.getElementById("half-day-alert");
+    const today = halfDayTodayIso();
+
+    if (isIntern) {
+      if (alertEl) alertEl.classList.add("hidden");
+      if (!box) return;
+      box.classList.remove("hidden");
+      setupHalfDayControls();
+      const { data, error } = await sb
+        .from("intern_half_days")
+        .select("id, day")
+        .eq("user_id", currentUser.id)
+        .gte("day", today)
+        .order("day");
+      const list = document.getElementById("half-day-list");
+      if (error) {
+        list.innerHTML = `<li class="text-red-500">Erro ao carregar: ${escapeHtml(error.message)}</li>`;
+        return;
+      }
+      list.innerHTML = (data || []).length
+        ? data
+            .map(
+              (r) => `<li class="flex items-center justify-between gap-3 rounded-lg bg-brand-bg px-3 py-2">
+          <span>${escapeHtml(formatDateBR(r.day))} (${halfDayWeekdayLabel(r.day)}) — meia tarde</span>
+          <button type="button" data-half-remove="${escapeHtml(r.id)}" class="text-xs text-red-500 underline">Remover</button>
+        </li>`
+            )
+            .join("")
+        : '<li class="text-xs text-brand-mist">Nenhum dia marcado.</li>';
+      return;
+    }
+
+    if (box) box.classList.add("hidden");
+    if (!alertEl) return;
+    const limit = new Date();
+    limit.setDate(limit.getDate() + HALF_DAY_ALERT_DAYS);
+    const { data, error } = await sb
+      .from("intern_half_days")
+      .select("user_id, day")
+      .gte("day", today)
+      .lte("day", toISODate(limit))
+      .order("day");
+    if (error || !data || !data.length) {
+      alertEl.classList.add("hidden");
+      return;
+    }
+    const ids = [...new Set(data.map((r) => r.user_id))];
+    const { data: profs } = await sb.from("profiles").select("id, full_name, email").in("id", ids);
+    const names = new Map((profs || []).map((p) => [p.id, (p.full_name || p.email || "").trim().split(/\s+/)[0]]));
+    document.getElementById("half-day-alert-list").innerHTML = data
+      .map(
+        (r) =>
+          `<li>${escapeHtml(names.get(r.user_id) || "Estagiária")} — ${escapeHtml(formatDateBR(r.day))} (${halfDayWeekdayLabel(r.day)}): meia tarde por causa de prova</li>`
+      )
+      .join("");
+    alertEl.classList.remove("hidden");
+  } catch (e) {
+    console.error("Meio período:", e);
   }
 }
 
