@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://xxielcplccjklkmyqbxx.supabase.co; connect-src 'self' https://xxielcplccjklkmyqbxx.supabase.co; base-uri 'self'; form-action 'self'; object-src 'none'" />
+<meta name="referrer" content="strict-origin-when-cross-origin" />
+<title>Hub Feijó Souza</title>
+<link rel="icon" href="assets/icon-navy.png" />
+
+<!-- Tipografia da marca: Quicksand (títulos) + Poppins (texto) -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Quicksand:wght@500;600;700&display=swap" rel="stylesheet" />
+
+<!-- Versão fixada (em vez de "@2" flutuante) por segurança: assim uma
+     atualização da biblioteca não passa a rodar automaticamente no Hub sem
+     revisão. Ao atualizar, confira a versão mais recente em
+     https://www.npmjs.com/package/@supabase/supabase-js antes de trocar o
+     número abaixo. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0" integrity="sha384-JBR+x8blGwjDRO63aHCGiZMD4VNiTR4ZUGA+N6ZKLf3zNt1fK8IBpcgPaMrxqWBp" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="style.css" />
+<link rel="stylesheet" href="tailwind.css" />
+</head>
+<body class="min-h-screen bg-brand-bg text-brand-charcoal font-body">
+
+  <!-- TELA DE LOGIN -->
+  <div id="login-screen" class="min-h-screen flex items-center justify-center px-4 login-bg">
+    <div class="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-10 text-center">
+      <img src="assets/logo-navy.png" alt="Feijó Souza" class="h-9 mx-auto mb-8" />
+      <h1 id="login-office-name" class="font-heading text-2xl font-semibold mb-1 text-brand-navy">Hub do Escritório</h1>
+      <p class="text-brand-slate mb-8">Acesse com o seu e-mail corporativo</p>
+      <button type="button" id="btn-login"
+        class="w-full flex items-center justify-center gap-3 bg-brand-navy hover:bg-brand-slate text-white rounded-full py-3 font-medium transition shadow-md shadow-brand-navy/20">
+        <svg width="18" height="18" viewBox="0 0 23 23"><path fill="#f35325" d="M1 1h10v10H1z"/><path fill="#81bc06" d="M12 1h10v10H12z"/><path fill="#05a6f0" d="M1 12h10v10H1z"/><path fill="#ffba08" d="M12 12h10v10H12z"/></svg>
+        Entrar com Microsoft
+      </button>
+      <p id="login-error" class="text-red-500 text-sm mt-4 hidden"></p>
+      <p class="text-xs text-brand-mist mt-8">Acesso restrito à equipe do escritório.</p>
+    </div>
+  </div>
+
+  <!-- APP PRINCIPAL -->
+  <div id="app-screen" class="hidden min-h-screen">
+    <header class="app-header">
+      <div class="max-w-5xl mx-auto px-4 py-5 flex items-center justify-between">
+        <button type="button" data-goto="home" class="flex items-center gap-3 text-left">
+          <img src="assets/icon-white.png" alt="" class="h-8 w-8" />
+          <div>
+            <h1 id="app-office-name" class="font-heading text-xl font-semibold text-white leading-tight">Hub do Escritório</h1>
+            <p id="welcome-msg" class="text-sm text-brand-mist"></p>
+          </div>
+        </button>
+        <button type="button" id="btn-logout" class="text-sm text-brand-mist hover:text-white transition">Sair</button>
+      </div>
+    </header>
+
+    <main class="max-w-5xl mx-auto px-4 py-8">
+
+      <!-- PAINEL: INÍCIO (landing page) -->
+      <section id="panel-home" class="tab-panel">
+        <h2 class="font-heading text-2xl font-semibold text-brand-navy mb-1">Bem-vindo(a) de volta!</h2>
+        <p class="text-brand-slate mb-6">Aqui está um resumo do escritório hoje.</p>
+
+        <div id="pending-vacations-alert" class="hidden mb-6 flex items-center justify-between gap-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <p id="pending-vacations-alert-text" class="text-sm text-amber-800"></p>
+          <button type="button" data-goto="ferias" class="text-sm font-medium text-amber-800 underline shrink-0">Ver pedidos</button>
+        </div>
+
+        <div id="pending-requests-alert" class="hidden mb-6 flex items-center justify-between gap-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <p id="pending-requests-alert-text" class="text-sm text-amber-800"></p>
+          <button type="button" data-goto="pedidos" class="text-sm font-medium text-amber-800 underline shrink-0">Ver pedidos</button>
+        </div>
+
+        <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          <div class="stat-card">
+            <p class="stat-label" id="summary-date-label">Hoje</p>
+            <p id="summary-homeoffice-count" class="stat-value">—</p>
+            <p id="summary-homeoffice-names" class="stat-sub"></p>
+          </div>
+          <div class="stat-card">
+            <p class="stat-label">Último aviso</p>
+            <p id="summary-announcement-title" class="stat-value">—</p>
+            <p id="summary-announcement-sub" class="stat-sub"></p>
+          </div>
+          <div class="stat-card">
+            <p class="stat-label">Próximo aniversário</p>
+            <p id="summary-birthday-name" class="stat-value">—</p>
+            <p id="summary-birthday-sub" class="stat-sub"></p>
+          </div>
+          <div class="stat-card">
+            <p class="stat-label">Próximas férias</p>
+            <p id="summary-vacation-name" class="stat-value">—</p>
+            <p id="summary-vacation-sub" class="stat-sub"></p>
+          </div>
+          <div id="summary-fsa-card" data-goto="estudos" class="stat-card hidden sm:col-span-2 lg:col-span-4 cursor-pointer">
+            <p class="stat-label" id="summary-fsa-label">FSA Estudos</p>
+            <p id="summary-fsa-when" class="stat-value">—</p>
+            <p id="summary-fsa-sub" class="stat-sub"></p>
+          </div>
+        </div>
+
+        <h3 class="font-heading text-base font-semibold text-brand-navy mb-3">O que você precisa?</h3>
+        <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <button type="button" class="tile" data-goto="homeoffice">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11.5 12 4l8 7.5"/><path d="M6 10v9h12v-9"/><path d="M10 19v-5h4v5"/></svg>
+            </span>
+            <span class="tile-title">Home office</span>
+            <span class="tile-desc">Marque seus dias e veja a escala da equipe</span>
+          </button>
+
+          <button type="button" class="tile" data-goto="equipe">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/><path d="M8 14h2M14 14h2M8 17.5h2"/></svg>
+            </span>
+            <span class="tile-title">Calendário da equipe</span>
+            <span class="tile-desc">Quem está fora, em home office ou no escritório</span>
+          </button>
+
+          <button type="button" class="tile" data-goto="avisos">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10v4a1 1 0 0 0 1 1h2l5 4V5L6 9H4a1 1 0 0 0-1 1Z"/><path d="M15 8c1.8 1.2 1.8 6.8 0 8"/><path d="M18 6c2.6 1.8 2.6 10.2 0 12"/></svg>
+            </span>
+            <span class="tile-title">Avisos</span>
+            <span class="tile-desc">Comunicados e novidades do escritório</span>
+          </button>
+
+          <button type="button" class="tile" data-goto="ferias">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+            </span>
+            <span class="tile-title">Férias</span>
+            <span class="tile-desc">Cadastre suas férias e veja a da equipe</span>
+          </button>
+
+          <button type="button" class="tile" data-goto="estagiarios">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="2.6"/><path d="M4 19c0-2.8 2.2-5 5-5s5 2.2 5 5"/><circle cx="17" cy="9" r="2.2"/><path d="M14.5 19c.3-2.2 1.9-4 3.9-4 1.6 0 3 1 3.6 2.5"/></svg>
+            </span>
+            <span class="tile-title">Escala dos estagiários</span>
+            <span class="tile-desc">Quem está alocado em qual projeto/núcleo</span>
+          </button>
+
+          <button type="button" class="tile" data-goto="manuals">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l4 4v14H7Z"/><path d="M14 3v4h4"/><path d="M9.5 12h5M9.5 15h5M9.5 9h2"/></svg>
+            </span>
+            <span class="tile-title">Manuais</span>
+            <span class="tile-desc">Documentos e procedimentos do escritório</span>
+          </button>
+
+          <button type="button" class="tile" data-goto="estudos">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5 2.5 9.5 12 14l9.5-4.5Z"/><path d="M6 11.5V16c0 1.4 2.7 3 6 3s6-1.6 6-3v-4.5"/><path d="M21.5 9.5V15"/></svg>
+            </span>
+            <span class="tile-title">FSA Estudos</span>
+            <span class="tile-desc">Talks e debates do escritório</span>
+          </button>
+
+          <button type="button" class="tile" data-goto="pedidos">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3H9z"/><path d="M7 5.5H5.5a1 1 0 0 0-1 1V20a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1V6.5a1 1 0 0 0-1-1H17"/><path d="M8 12h8M8 16h5"/></svg>
+            </span>
+            <span class="tile-title">Pedidos internos</span>
+            <span class="tile-desc">TI, compras e reembolso</span>
+          </button>
+
+          <button type="button" class="tile" data-goto="birthdays">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="9" width="16" height="11" rx="1"/><path d="M4 9h16"/><path d="M12 9v11"/><path d="M12 9c-1.5-4-6-4-6-1 0 1.5 2 1 6 1Z"/><path d="M12 9c1.5-4 6-4 6-1 0 1.5-2 1-6 1Z"/></svg>
+            </span>
+            <span class="tile-title">Aniversários</span>
+            <span class="tile-desc">Acompanhe os aniversários da equipe</span>
+          </button>
+
+          <button type="button" class="tile" data-goto="perfil">
+            <span class="tile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"/><path d="M5 20c0-3.6 3.1-6.5 7-6.5s7 2.9 7 6.5"/></svg>
+            </span>
+            <span class="tile-title">Meu perfil</span>
+          </button>
+        </div>
+      </section>
+
+      <!-- PAINEL: HOME OFFICE -->
+      <section id="panel-homeoffice" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Escala de home office da semana</h2>
+        <div class="flex items-center gap-3 mb-4">
+          <p id="week-range" class="text-sm text-brand-slate"></p>
+          <button type="button" id="btn-week-prev" class="hidden text-xs font-medium text-brand-navy border border-slate-200 rounded-lg px-3 py-1 hover:bg-slate-50">&larr; Semana atual</button>
+          <button type="button" id="btn-week-next" class="text-xs font-medium text-brand-navy border border-slate-200 rounded-lg px-3 py-1 hover:bg-slate-50">Semana seguinte &rarr;</button>
+        </div>
+
+        <div class="card mb-6">
+          <p id="homeoffice-instructions" class="text-sm font-medium mb-1">Marque os períodos (manhã/tarde) em que você fará home office esta semana:</p>
+          <p id="homeoffice-subinstructions" class="text-xs text-brand-mist mb-3">Máximo de 4 períodos por semana (equivalente a 2 dias inteiros).</p>
+          <div id="my-week-days" class="flex flex-wrap gap-4"></div>
+          <p id="week-quota-label" class="text-xs text-brand-slate mt-4"></p>
+        </div>
+
+        <div class="card overflow-x-auto">
+          <p class="text-sm font-medium mb-3">Escala completa da equipe</p>
+          <table class="w-full text-sm">
+            <thead>
+              <tr id="team-week-header" class="text-left text-brand-slate border-b border-slate-100"></tr>
+            </thead>
+            <tbody id="team-week-body"></tbody>
+          </table>
+        </div>
+
+        <div id="homeoffice-admin-log" class="card mt-6 hidden"></div>
+      </section>
+
+      <!-- PAINEL: ANIVERSÁRIOS -->
+      <section id="panel-birthdays" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Aniversários da equipe</h2>
+        <div class="card mb-6">
+          <p class="text-sm font-medium mb-3">Sua data de nascimento</p>
+          <div class="flex gap-3 items-center">
+            <input id="my-birth-date" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            <button type="button" id="btn-save-birth-date" class="btn-primary">Salvar</button>
+            <span id="birth-date-saved-msg" class="text-sm text-green-600 hidden">Salvo!</span>
+          </div>
+        </div>
+        <div id="birthdays-list" class="card divide-y divide-slate-100 !p-0"></div>
+      </section>
+
+      <!-- PAINEL: AVISOS -->
+      <section id="panel-avisos" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Avisos do escritório</h2>
+        <p class="text-sm text-brand-slate mb-4">Comunicados e novidades para toda a equipe.</p>
+
+        <div id="admin-add-announcement-box" class="card mb-6 hidden">
+          <p class="text-sm font-medium mb-3">Publicar aviso</p>
+          <input id="announcement-title" type="text" placeholder="Título" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mb-3" />
+          <textarea id="announcement-body" placeholder="Mensagem" rows="3" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full"></textarea>
+          <p id="announcement-error" class="text-sm text-red-500 mt-2 hidden"></p>
+          <button type="button" id="btn-add-announcement" class="mt-3 btn-primary">Publicar</button>
+        </div>
+
+        <input id="announcements-search" type="search" placeholder="Buscar avisos..." class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mb-4" />
+
+        <div id="announcements-list" class="space-y-3"></div>
+        <div class="flex justify-center mt-5">
+          <button type="button" id="announcements-load-more" class="hidden text-sm font-medium text-brand-navy border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-50">Carregar mais</button>
+        </div>
+      </section>
+
+      <!-- PAINEL: FÉRIAS -->
+      <section id="panel-ferias" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Férias</h2>
+
+        <div id="vacation-pending-banner" class="hidden mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"></div>
+        <div id="admin-vacation-balances" class="card mb-6 hidden"></div>
+
+        <div class="card mb-6">
+          <button type="button" id="btn-toggle-vacation-rules" class="flex items-center justify-between w-full text-left">
+            <p class="text-sm font-medium">Regras de férias</p>
+            <span id="vacation-rules-toggle-icon" class="text-brand-slate text-sm">Ver regras ▾</span>
+          </button>
+          <div id="vacation-rules-body" class="mt-3 text-sm text-brand-slate space-y-2 hidden">
+            <ul class="list-disc pl-5 space-y-1.5">
+              <li>Cada pessoa tem direito a <strong>22 dias úteis</strong> de férias ao longo do ano (o saldo remanescente é calculado automaticamente aqui no hub, ou pode aparecer com um valor definido manualmente pela administração).</li>
+              <li>Peça as férias com <strong>pelo menos uma semana de antecedência</strong>.</li>
+              <li><strong>Pelo menos metade da equipe</strong> precisa estar disponível no período. Se a equipe tiver número ímpar, o cálculo arredonda para cima (por exemplo, em uma equipe de 9 pessoas, ao menos 5 precisam estar disponíveis). Combine com o time antes de confirmar.</li>
+              <li>Férias de <strong>mais de 5 dias úteis</strong> precisam ser <strong>autorizadas previamente</strong>.</li>
+              <li>O saldo é contado <strong>por ano</strong>: cada dia de férias sai do saldo do ano em que ele cai. Para quem já tem mais de 1 ano de casa, os dias não usados em um ano <strong>vencem em 31/12</strong>.</li>
+              <li>Não há indenização de férias: o saldo não vira dinheiro, então é importante sempre tirar os dias e descansar.</li>
+              <li>Período aquisitivo de <strong>6 meses</strong> de escritório: antes disso ainda não há saldo; ao completar 6 meses, a pessoa passa a ter direito aos dias proporcionais remanescentes daquele ano.</li>
+              <li>Recesso de final de ano (24/12, 25/12, 31/12 e 01/01 — a avaliar anualmente): é um recesso coletivo do escritório e <strong>não é descontado</strong> do saldo individual de férias de cada pessoa.</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="card mb-6">
+          <p class="text-sm font-medium mb-3">Cadastrar período de férias</p>
+          <div class="flex flex-wrap gap-3 items-end">
+            <div>
+              <label class="block text-xs text-brand-slate mb-1">Início</label>
+              <input id="vacation-start" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label class="block text-xs text-brand-slate mb-1">Fim</label>
+              <input id="vacation-end" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <button type="button" id="btn-add-vacation" class="btn-primary">Salvar</button>
+          </div>
+          <p id="vacation-days-preview" class="text-sm text-brand-slate mt-3"></p>
+          <p id="vacation-error" class="text-sm text-red-500 mt-2 hidden"></p>
+          <p id="vacation-info" class="text-sm text-amber-600 mt-2 hidden"></p>
+        </div>
+
+        <div id="vacations-list" class="card divide-y divide-slate-100 !p-0 mb-6"></div>
+
+        <div class="card">
+          <button type="button" id="btn-toggle-holidays-calendar" class="flex items-center justify-between w-full text-left">
+            <div>
+              <p class="text-sm font-medium">Calendário de feriados</p>
+              <p class="text-xs text-brand-mist mt-0.5">Próximos feriados nacionais + recessos cadastrados pelo escritório, usados para calcular dias úteis nas férias.</p>
+            </div>
+            <span id="holidays-calendar-toggle-icon" class="text-brand-slate text-sm shrink-0 ml-3">Ver calendário ▾</span>
+          </button>
+
+          <div id="holidays-calendar-body" class="hidden mt-3">
+            <div id="holidays-calendar-list" class="divide-y divide-slate-100"></div>
+            <div class="flex justify-center mt-3">
+              <button type="button" id="holidays-calendar-load-more" class="hidden text-sm font-medium text-brand-navy border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-50">Carregar mais</button>
+            </div>
+
+            <div id="admin-add-holiday-box" class="hidden mt-4 pt-4 border-t border-slate-100">
+              <p class="text-sm font-medium mb-3">Adicionar feriado/recesso extra (somente administradores)</p>
+              <div class="flex flex-wrap gap-3 items-end">
+                <div>
+                  <label class="block text-xs text-brand-slate mb-1">Data</label>
+                  <input id="holiday-date" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div>
+                  <label class="block text-xs text-brand-slate mb-1">Descrição</label>
+                  <input id="holiday-name" type="text" placeholder="Ex.: Recesso de fim de ano" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <button type="button" id="btn-add-holiday" class="btn-primary">Adicionar</button>
+              </div>
+              <p id="holiday-error" class="text-sm text-red-500 mt-2 hidden"></p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- PAINEL: ESCALA DOS ESTAGIÁRIOS -->
+      <section id="panel-estagiarios" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-1 text-brand-navy mt-3">Escala dos estagiários</h2>
+        <p class="text-sm text-brand-slate mb-4">O núcleo de cada estagiária é calculado automaticamente a cada quinzena (alternam entre Sherwood e Licitação + Embraprec + Geral). Abaixo, o núcleo atual e o da próxima quinzena.</p>
+
+        <div id="interns-rotation-summary" class="mb-6"></div>
+
+        <div id="admin-add-intern-box" class="card mb-6 hidden">
+          <p class="text-sm font-medium mb-3">Registrar exceção/observação (somente administradores)</p>
+          <div class="grid sm:grid-cols-3 gap-3">
+            <input id="intern-name" type="text" placeholder="Nome do estagiário" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            <input id="intern-project" type="text" placeholder="Projeto/Núcleo" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            <input id="intern-notes" type="text" placeholder="Observações (opcional)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <div class="mt-3">
+            <label class="block text-xs text-brand-slate mb-1">Início da quinzena</label>
+            <input id="intern-week" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <p id="intern-error" class="text-sm text-red-500 mt-2 hidden"></p>
+          <button type="button" id="btn-add-intern" class="mt-3 btn-primary">Adicionar</button>
+        </div>
+
+        <p class="text-xs font-semibold uppercase tracking-wide text-brand-mist mb-2">Exceções e observações (quinzena atual em diante)</p>
+        <div id="interns-list" class="card divide-y divide-slate-100 !p-0"></div>
+      </section>
+
+      <!-- PAINEL: MANUAIS -->
+      <section id="panel-manuals" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-4 text-brand-navy mt-3">Manuais de procedimentos</h2>
+
+        <div id="admin-add-manual-box" class="card mb-6 hidden">
+          <p class="text-sm font-medium mb-3">Adicionar manual</p>
+          <div class="grid sm:grid-cols-2 gap-3">
+            <input id="manual-title" type="text" placeholder="Título" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            <input id="manual-file" type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white file:mr-3 file:py-1 file:px-3 file:rounded-full file:border-0 file:bg-brand-navy file:text-white file:text-xs file:cursor-pointer" />
+          </div>
+          <p class="text-xs text-brand-mist mt-2">Tamanho máximo por arquivo: 50 MB.</p>
+          <p id="manual-upload-error" class="text-sm text-red-500 mt-2 hidden"></p>
+          <button type="button" id="btn-add-manual" class="mt-3 btn-primary">Adicionar</button>
+        </div>
+
+        <input id="manuals-search" type="search" placeholder="Buscar manuais por título..." class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mb-4" />
+
+        <div id="manuals-list" class="card divide-y divide-slate-100 !p-0"></div>
+        <div class="flex justify-center mt-5">
+          <button type="button" id="manuals-load-more" class="hidden text-sm font-medium text-brand-navy border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-50">Carregar mais</button>
+        </div>
+      </section>
+
+      <!-- PAINEL: CALENDÁRIO DA EQUIPE -->
+      <section id="panel-equipe" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-4 text-brand-navy mt-3">Calendário da equipe</h2>
+
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <button type="button" id="btn-teamcal-prev" class="text-sm rounded-full px-4 py-1.5 border border-slate-200 text-brand-slate hover:bg-slate-50 disabled:opacity-40">&larr; Semana anterior</button>
+          <button type="button" id="btn-teamcal-next" class="text-sm rounded-full px-4 py-1.5 border border-slate-200 text-brand-slate hover:bg-slate-50 disabled:opacity-40">Próxima semana &rarr;</button>
+          <button type="button" id="btn-teamcal-today" class="hidden text-sm text-brand-navy underline">Voltar para esta semana</button>
+        </div>
+        <p id="teamcal-range" class="text-sm text-brand-slate mb-3"></p>
+
+        <div id="teamcal-table" class="card !p-0 overflow-x-auto mb-3"></div>
+
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-brand-slate mb-8">
+          <span><span class="inline-block rounded-md px-2 py-0.5 bg-amber-100 text-amber-800">Férias</span></span>
+          <span><span class="inline-block rounded-md px-2 py-0.5 bg-amber-50 text-amber-700 border border-dashed border-amber-300">Férias (pendente)</span> ainda não aprovadas</span>
+          <span><span class="inline-block rounded-md px-2 py-0.5 bg-sky-100 text-sky-800">Home office</span></span>
+        </div>
+
+        <h3 class="font-heading text-base font-semibold text-brand-navy mb-3">Próximas semanas</h3>
+        <div id="teamcal-panorama" class="grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
+      </section>
+
+      <!-- PAINEL: PEDIDOS INTERNOS -->
+      <section id="panel-pedidos" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-4 text-brand-navy mt-3">Pedidos internos</h2>
+
+        <div class="card mb-6">
+          <p class="text-sm font-medium mb-3">Novo pedido</p>
+          <div class="grid sm:grid-cols-2 gap-3">
+            <select id="req-kind" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white">
+              <option value="ti">TI</option>
+              <option value="compras">Compras</option>
+              <option value="reembolso">Reembolso</option>
+            </select>
+            <input id="req-title" type="text" maxlength="200" placeholder="Assunto" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            <div id="req-amount-wrap" class="hidden">
+              <input id="req-amount" type="text" inputmode="decimal" maxlength="14" placeholder="Valor (R$)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full" />
+            </div>
+          </div>
+          <textarea id="req-description" rows="3" maxlength="5000" placeholder="Detalhes do pedido" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mt-3"></textarea>
+          <label class="block text-xs text-brand-slate mt-3"><span id="req-file-label">Anexo opcional (PDF ou imagem, até 10 MB)</span>
+            <input id="req-file" type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp" class="block text-sm mt-1" />
+          </label>
+          <p id="req-form-error" class="text-sm text-red-500 mt-2 hidden"></p>
+          <div class="mt-3">
+            <button type="button" id="req-submit" class="btn-primary">Enviar pedido</button>
+          </div>
+        </div>
+
+        <div id="req-scope-box" class="hidden flex flex-wrap items-center gap-2 mb-3">
+          <button type="button" data-req-scope="all">Todos os pedidos</button>
+          <button type="button" data-req-scope="mine">Meus pedidos</button>
+        </div>
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <button type="button" data-req-status="all">Todos</button>
+          <button type="button" data-req-status="pending">Pendentes</button>
+          <button type="button" data-req-status="approved">Aprovados</button>
+          <button type="button" data-req-status="rejected">Recusados</button>
+          <button type="button" data-req-status="done">Concluídos</button>
+          <select id="req-kind-filter" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white ml-auto">
+            <option value="all">Todos os tipos</option>
+            <option value="ti">TI</option>
+            <option value="compras">Compras</option>
+            <option value="reembolso">Reembolso</option>
+          </select>
+        </div>
+
+        <div id="req-list" class="space-y-3"></div>
+        <div class="flex justify-center mt-5">
+          <button type="button" id="req-more" class="hidden text-sm font-medium text-brand-navy border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-50">Carregar mais</button>
+        </div>
+      </section>
+
+      <!-- PAINEL: FSA ESTUDOS -->
+      <section id="panel-comercial" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <div id="crm-root" class="mt-3 ml-[calc(50%-min(48vw,750px))] w-[min(96vw,1500px)]"></div>
+      </section>
+
+      <section id="panel-estudos" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-4 text-brand-navy mt-3">FSA Estudos</h2>
+
+        <div id="study-admin-box" class="mb-6 hidden">
+          <button type="button" id="study-new-btn" class="btn-primary">Novo encontro</button>
+          <div id="study-form" class="card hidden">
+            <p id="study-form-title" class="text-sm font-medium mb-3">Novo encontro</p>
+            <div class="grid sm:grid-cols-2 gap-3">
+              <select id="study-kind" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white">
+                <option value="debate">FSA Debate</option>
+                <option value="talk">FSA Talk</option>
+              </select>
+              <input id="study-title" type="text" maxlength="200" placeholder="Tema do encontro" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <input id="study-date" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <input id="study-time" type="time" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <input id="study-location" type="text" maxlength="200" placeholder="Local (opcional)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              <select id="study-presenter" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white">
+                <option value="">A definir</option>
+              </select>
+            </div>
+            <textarea id="study-description" rows="3" maxlength="5000" placeholder="Descrição: pauta, perguntas para o debate, o que preparar..." class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mt-3"></textarea>
+            <textarea id="study-summary" rows="3" maxlength="10000" placeholder="Resumo e conclusões (preencha depois do encontro)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mt-3"></textarea>
+            <p id="study-form-error" class="text-sm text-red-500 mt-2 hidden"></p>
+            <div class="flex gap-3 mt-3">
+              <button type="button" id="study-save-btn" class="btn-primary">Salvar</button>
+              <button type="button" id="study-cancel-btn" class="text-sm text-brand-slate hover:underline">Cancelar</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2 mb-3">
+          <button type="button" data-study-filter="all">Todos</button>
+          <button type="button" data-study-filter="debate">FSA Debates</button>
+          <button type="button" data-study-filter="talk">FSA Talks</button>
+        </div>
+        <input id="study-search" type="search" placeholder="Buscar por tema, descrição ou apresentador..." class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mb-6" />
+
+        <h3 class="font-heading text-base font-semibold text-brand-navy mb-3">Próximos encontros</h3>
+        <div id="study-upcoming" class="space-y-3 mb-8"></div>
+
+        <h3 class="font-heading text-base font-semibold text-brand-navy mb-3">Encontros anteriores</h3>
+        <div id="study-past" class="space-y-3"></div>
+        <div class="flex justify-center mt-5">
+          <button type="button" id="study-past-more" class="hidden text-sm font-medium text-brand-navy border border-slate-200 rounded-full px-4 py-2 hover:bg-slate-50">Carregar mais</button>
+        </div>
+      </section>
+
+      <!-- PAINEL: MEU PERFIL -->
+      <section id="panel-perfil" class="tab-panel hidden">
+        <button type="button" data-goto="home" class="back-link">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path d="M15 5 8 12l7 7"/></svg>
+          Voltar
+        </button>
+        <h2 class="font-heading text-lg font-semibold mb-4 text-brand-navy mt-3">Meu perfil</h2>
+
+        <div class="grid sm:grid-cols-2 gap-4 mb-6">
+          <div class="stat-card">
+            <p class="stat-label">Admissão</p>
+            <p id="profile-hire-date" class="stat-value">—</p>
+            <p id="profile-tenure-sub" class="stat-sub"></p>
+          </div>
+          <div class="stat-card">
+            <p class="stat-label">Saldo de férias remanescentes no ano corrente</p>
+            <p id="profile-vacation-balance" class="stat-value">—</p>
+            <p id="profile-vacation-balance-sub" class="stat-sub"></p>
+          </div>
+        </div>
+
+        <div class="card mb-6 !p-0">
+          <p class="text-sm font-medium p-4 pb-0">Histórico de feedbacks</p>
+          <div id="profile-feedback-list" class="divide-y divide-slate-100 mt-3"></div>
+        </div>
+
+        <div id="giver-feedback-box" class="card mb-6 hidden">
+          <p class="text-sm font-medium mb-1">Feedback para estagiárias</p>
+          <p class="text-xs text-brand-slate mb-3">Você pode registrar feedback para as pessoas da lista. Elas veem o texto, a nota e o seu nome. Quem tem essa permissão vê o histórico completo, mas só remove os feedbacks que escreveu.</p>
+          <div class="mb-3">
+            <label class="block text-xs text-brand-slate mb-1">Estagiária</label>
+            <select id="giver-feedback-select" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full sm:w-80"></select>
+          </div>
+          <div class="mb-3">
+            <label class="block text-xs text-brand-slate mb-1">Nota (-3 bem negativo · 0 neutro · +3 bem positivo)</label>
+            <div id="giver-feedback-score-picker" class="flex gap-2 flex-wrap"></div>
+          </div>
+          <div class="mb-3">
+            <label class="block text-xs text-brand-slate mb-1">Data do feedback</label>
+            <input id="giver-feedback-date" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <textarea id="giver-feedback-body" placeholder="Escreva o feedback..." rows="3" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mb-2"></textarea>
+          <button type="button" id="btn-giver-add-feedback" class="btn-primary">Adicionar feedback</button>
+          <p id="giver-feedback-error" class="text-sm text-red-500 mt-2 hidden"></p>
+          <div class="mt-5">
+            <p class="text-sm font-medium mb-2">Histórico</p>
+            <div id="giver-feedback-list" class="divide-y divide-slate-100"></div>
+          </div>
+        </div>
+
+        <div id="admin-profile-editor-box" class="card hidden">
+          <p class="text-sm font-medium mb-3">Editar perfil de um(a) colaborador(a) (somente administradores)</p>
+          <div class="mb-4">
+            <label class="block text-xs text-brand-slate mb-1">Colaborador(a)</label>
+            <select id="profile-editor-select" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full sm:w-80"></select>
+          </div>
+
+          <div id="profile-editor-fields" class="hidden">
+            <div class="flex flex-wrap gap-3 items-end mb-2">
+              <div>
+                <label class="block text-xs text-brand-slate mb-1">Data de admissão</label>
+                <input id="profile-editor-hire-date" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label class="block text-xs text-brand-slate mb-1">Saldo de férias (dias) — em branco = calcular automaticamente</label>
+                <input id="profile-editor-vacation-balance" type="number" step="0.5" min="0" placeholder="Automático" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-32" />
+              </div>
+              <button type="button" id="btn-save-profile-details" class="btn-primary">Salvar</button>
+              <span id="profile-editor-saved-msg" class="text-sm text-green-600 hidden">Salvo!</span>
+            </div>
+            <p id="profile-editor-vacation-balance-hint" class="text-xs text-brand-slate mb-2"></p>
+            <p id="profile-editor-error" class="text-sm text-red-500 mb-4 hidden"></p>
+
+            <p class="text-sm font-medium mb-2">Adicionar feedback</p>
+            <div class="mb-3">
+              <label class="block text-xs text-brand-slate mb-1">Nota (-3 bem negativo · 0 neutro · +3 bem positivo)</label>
+              <div id="feedback-score-picker" class="flex gap-2 flex-wrap"></div>
+            </div>
+            <div class="mb-3">
+              <label class="block text-xs text-brand-slate mb-1">Data do feedback</label>
+              <input id="profile-editor-feedback-date" type="date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <textarea id="profile-editor-feedback-body" placeholder="Escreva o feedback..." rows="3" class="border border-slate-200 rounded-lg px-3 py-2 text-sm w-full mb-2"></textarea>
+            <button type="button" id="btn-add-feedback" class="btn-primary">Adicionar feedback</button>
+            <p id="profile-editor-feedback-error" class="text-sm text-red-500 mt-2 hidden"></p>
+
+            <div class="mt-5">
+              <p class="text-sm font-medium mb-2">Histórico</p>
+              <div id="profile-editor-feedback-list" class="divide-y divide-slate-100"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+  <script src="comercial.js?v=1"></script>
+</body>
+</html>
