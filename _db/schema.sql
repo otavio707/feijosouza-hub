@@ -1516,3 +1516,31 @@ select cron.schedule(
   );
   $cron$
 );
+
+-- Aviso imediato: ao marcar meio período, o banco chama a função half-day-email na
+-- hora (o cron de hora em hora continua como reserva caso o envio falhe). A função
+-- é idempotente (reserva notified_at) e a falha na chamada nunca bloqueia a marcação.
+create or replace function public.intern_half_days_notify()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform net.http_post(
+    url := 'https://xxielcplccjklkmyqbxx.supabase.co/functions/v1/half-day-email',
+    headers := jsonb_build_object('Content-Type', 'application/json'),
+    body := '{}'::jsonb
+  );
+  return null;
+exception when others then
+  return null;
+end;
+$$;
+
+revoke execute on function public.intern_half_days_notify() from public, anon, authenticated;
+
+drop trigger if exists intern_half_days_notify on public.intern_half_days;
+create trigger intern_half_days_notify
+  after insert on public.intern_half_days
+  for each statement execute function public.intern_half_days_notify();
