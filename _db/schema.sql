@@ -1455,3 +1455,64 @@ cross join public.profiles i
 where g.email in ('lian.marcilio@feijosouza.com.br', 'fernanda.bernardelli@feijosouza.com.br', 'isabela.leon@feijosouza.com.br')
   and i.email in ('luiza.romanelli@feijosouza.com.br', 'juliana.fontanini@feijosouza.com.br')
 on conflict do nothing;
+
+
+-- ----------------------------------------------------------------------------
+-- 30. MEIO PERÍODO NA SEMANA DE PROVA (estagiárias) — Lei 11.788/2008, art. 10, §2º
+-- ----------------------------------------------------------------------------
+-- Em períodos de avaliação da faculdade a carga horária do estágio é reduzida
+-- pelo menos à metade. A estagiária marca direto (sem aprovação) os dias em que
+-- fará só meia tarde; todos veem no Calendário e admins/advogados são avisados
+-- na tela inicial. Sem comprovante (boa-fé). Só dias úteis de hoje em diante.
+create table if not exists public.intern_half_days (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  day date not null,
+  created_at timestamptz not null default now(),
+  notified_at timestamptz,  -- preenchido pela função half-day-email ao avisar a equipe
+  unique (user_id, day),
+  constraint intern_half_days_weekday check (extract(isodow from day) between 1 and 5)
+);
+
+alter table public.intern_half_days enable row level security;
+revoke all on table public.intern_half_days from anon, authenticated;
+grant select, insert, delete on table public.intern_half_days to authenticated;
+grant all on table public.intern_half_days to service_role;
+
+drop policy if exists "intern_half_days_select_all" on public.intern_half_days;
+create policy "intern_half_days_select_all" on public.intern_half_days
+  for select to authenticated using (true);
+
+drop policy if exists "intern_half_days_insert_own" on public.intern_half_days;
+create policy "intern_half_days_insert_own" on public.intern_half_days
+  for insert to authenticated
+  with check (
+    user_id = auth.uid()
+    and day >= (now() at time zone 'America/Sao_Paulo')::date
+    and exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_intern)
+  );
+
+drop policy if exists "intern_half_days_delete_own" on public.intern_half_days;
+create policy "intern_half_days_delete_own" on public.intern_half_days
+  for delete to authenticated
+  using (
+    user_id = auth.uid()
+    and day >= (now() at time zone 'America/Sao_Paulo')::date
+  );
+
+-- E-mail de aviso (admins e advogados = todas as pessoas ativas que não são
+-- estagiárias). A Edge Function "half-day-email" (código em _db/half-day-email.ts)
+-- roda de hora em hora no horário comercial, junta as marcações ainda não
+-- avisadas (notified_at nulo) e envia UM e-mail. É idempotente: a reserva
+-- (notified_at) é atômica e é desfeita se o envio falhar.
+select cron.schedule(
+  'half-day-email',
+  '0 11-21 * * 1-5',
+  $cron$
+  select net.http_post(
+    url := 'https://xxielcplccjklkmyqbxx.supabase.co/functions/v1/half-day-email',
+    headers := jsonb_build_object('Content-Type', 'application/json'),
+    body := '{}'::jsonb
+  );
+  $cron$
+);
