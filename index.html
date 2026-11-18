@@ -219,6 +219,17 @@
           <ul id="half-day-list" class="mt-3 text-sm space-y-1"></ul>
         </div>
 
+        <div id="shift-swap-box" class="card mb-6 hidden">
+          <p class="text-sm font-medium mb-1">Trabalhar de manhã em vez de à tarde</p>
+          <p class="text-xs text-brand-mist mb-3">Seu expediente é de 5 horas, normalmente à tarde. Se em algum dia preferir trabalhar de manhã, marque aqui: os advogados e a administração recebem um e-mail na hora.</p>
+          <div class="flex flex-wrap items-center gap-3">
+            <input type="date" id="shift-swap-date" class="border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+            <button type="button" id="btn-shift-swap-add" class="text-sm font-medium text-white bg-brand-navy rounded-lg px-4 py-2 hover:opacity-90">Vou trabalhar de manhã</button>
+          </div>
+          <p id="shift-swap-msg" class="text-xs mt-2"></p>
+          <ul id="shift-swap-list" class="mt-3 text-sm space-y-1"></ul>
+        </div>
+
         <div class="card overflow-x-auto">
           <p class="text-sm font-medium mb-3">Escala completa da equipe</p>
           <table class="w-full text-sm">

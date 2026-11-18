@@ -103,6 +103,7 @@ async function enterApp(user) {
     loadStudies(),
     loadRequestsHome(),
     loadHalfDays(),
+    loadShiftSwaps(),
     loadProfileTab(),
   ]);
 }
@@ -3435,6 +3436,114 @@ async function loadHalfDays() {
     alertEl.classList.remove("hidden");
   } catch (e) {
     console.error("Meio período:", e);
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Troca de turno das estagiárias (trabalhar de manhã em vez de à tarde)
+// ----------------------------------------------------------------------------
+// O expediente delas é de 5 horas, normalmente à tarde. A estagiária marca direto
+// (sem aprovação, qualquer dia útil, sem limite de antecedência) os dias em que
+// vai trabalhar de manhã; o banco chama a função half-day-email, que avisa por
+// e-mail os admins e advogados na hora.
+
+let shiftSwapReady = false;
+
+function setShiftSwapMsg(text, isError) {
+  const el = document.getElementById("shift-swap-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = "text-xs mt-2 " + (isError ? "text-red-500" : "text-brand-slate");
+}
+
+function setupShiftSwapControls() {
+  if (shiftSwapReady) return;
+  shiftSwapReady = true;
+  const btn = document.getElementById("btn-shift-swap-add");
+  if (btn) btn.addEventListener("click", addShiftSwap);
+  const list = document.getElementById("shift-swap-list");
+  if (list) {
+    list.addEventListener("click", (ev) => {
+      const b = ev.target.closest("[data-swap-remove]");
+      if (b) removeShiftSwap(b.getAttribute("data-swap-remove"));
+    });
+  }
+}
+
+async function addShiftSwap() {
+  const input = document.getElementById("shift-swap-date");
+  const iso = input?.value || "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    setShiftSwapMsg("Escolha a data.", true);
+    return;
+  }
+  const [y, m, d] = iso.split("-").map(Number);
+  const wd = new Date(y, m - 1, d).getDay();
+  if (wd === 0 || wd === 6) {
+    setShiftSwapMsg("Escolha um dia útil (segunda a sexta).", true);
+    return;
+  }
+  if (isHoliday(iso, y)) {
+    setShiftSwapMsg("Esse dia é feriado.", true);
+    return;
+  }
+  const { error } = await sb.from("intern_shift_swaps").insert({ user_id: currentUser.id, day: iso });
+  if (error) {
+    setShiftSwapMsg(
+      error.code === "23505" ? "Esse dia já está marcado." : "Não foi possível marcar: " + error.message,
+      true
+    );
+    return;
+  }
+  input.value = "";
+  setShiftSwapMsg("Marcado: de manhã em " + formatDateBR(iso) + ". Os advogados e a administração foram avisados por e-mail.", false);
+  await loadShiftSwaps();
+}
+
+async function removeShiftSwap(id) {
+  if (!id) return;
+  const { error } = await sb.from("intern_shift_swaps").delete().eq("id", id);
+  if (error) {
+    setShiftSwapMsg("Não foi possível remover: " + error.message, true);
+    return;
+  }
+  setShiftSwapMsg("Marcação removida (o e-mail que já saiu não é desfeito; se precisar, avise a equipe).", false);
+  await loadShiftSwaps();
+}
+
+async function loadShiftSwaps() {
+  try {
+    const box = document.getElementById("shift-swap-box");
+    if (!box) return;
+    if (!currentProfile?.is_intern) {
+      box.classList.add("hidden");
+      return;
+    }
+    box.classList.remove("hidden");
+    setupShiftSwapControls();
+    const { data, error } = await sb
+      .from("intern_shift_swaps")
+      .select("id, day")
+      .eq("user_id", currentUser.id)
+      .gte("day", halfDayTodayIso())
+      .order("day");
+    const list = document.getElementById("shift-swap-list");
+    if (error) {
+      list.innerHTML = `<li class="text-red-500">Erro ao carregar: ${escapeHtml(error.message)}</li>`;
+      return;
+    }
+    list.innerHTML = (data || []).length
+      ? data
+          .map(
+            (r) => `<li class="flex items-center justify-between gap-3 rounded-lg bg-brand-bg px-3 py-2">
+          <span>${escapeHtml(formatDateBR(r.day))} (${halfDayWeekdayLabel(r.day)}) — de manhã</span>
+          <button type="button" data-swap-remove="${escapeHtml(r.id)}" class="text-xs text-red-500 underline">Remover</button>
+        </li>`
+          )
+          .join("")
+      : '<li class="text-xs text-brand-mist">Nenhum dia marcado.</li>';
+  } catch (e) {
+    console.error("Troca de turno:", e);
   }
 }
 
