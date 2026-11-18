@@ -1,9 +1,12 @@
 // =============================================================================
 // half-day-email
-// Roda de hora em hora no horário comercial (pg_cron, seg-sex 8h-18h de Brasília).
-// Se houver marcações de meio período (prova) das estagiárias ainda não avisadas,
-// envia UM e-mail a todas as pessoas ativas que não são estagiárias (admins e
-// advogados) pelo Microsoft Graph (mesmas credenciais do Azure das outras funções).
+// Avisa por e-mail as marcações das estagiárias ainda não avisadas, de DUAS tabelas:
+//   - intern_half_days   (meio período em dia de prova)
+//   - intern_shift_swaps (troca de turno: trabalhar de manhã em vez de à tarde)
+// É chamada na hora pelo gatilho do banco e de hora em hora no horário comercial
+// (pg_cron, seg-sex 8h-18h de Brasília). Para cada tabela com pendências envia UM
+// e-mail a todas as pessoas ativas que não são estagiárias (admins e advogados)
+// pelo Microsoft Graph (mesmas credenciais do Azure das outras funções).
 //
 // Segurança: "Verify JWT" fica DESLIGADO (o projeto usa chaves publishable). O que
 // protege é o desenho: a função não recebe dados de quem chama; o e-mail só vai
@@ -84,30 +87,64 @@ function weekday(iso: string): string {
   return WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
 }
 
-Deno.serve(async (req) => {
+type Row = { id: string; user_id: string; day: string };
+
+type Kind = {
+  table: string;
+  // filtro extra de dias pendentes (ex.: meio período só de hoje em diante)
+  pendingFilter: (today: string) => string;
+  subject: (rows: Row[], nameOf: Map<string, string>) => string;
+  line: (name: string, row: Row) => string;
+  intro: string;
+  outro: string;
+};
+
+const KINDS: Kind[] = [
+  {
+    table: "intern_half_days",
+    pendingFilter: (today) => `&day=gte.${today}`,
+    subject: (rows, nameOf) =>
+      rows.length === 1
+        ? `Meio período (prova): ${nameOf.get(rows[0].user_id) || "Estagiária"} em ${formatBR(rows[0].day)}`
+        : `Meio período (prova): ${rows.length} marcações de estagiárias`,
+    line: (name, r) => `• ${name} — ${formatBR(r.day)} (${weekday(r.day)}): meia tarde por causa de prova`,
+    intro:
+      "As seguintes estagiárias marcaram meio período no Hub por causa de prova na faculdade (Lei do Estágio, art. 10, §2º):",
+    outro: "As marcações também aparecem no Calendário da equipe.",
+  },
+  {
+    table: "intern_shift_swaps",
+    pendingFilter: () => "",
+    subject: (rows, nameOf) =>
+      rows.length === 1
+        ? `Troca de turno: ${nameOf.get(rows[0].user_id) || "Estagiária"} trabalha de manhã em ${formatBR(rows[0].day)}`
+        : `Troca de turno: ${rows.length} marcações de estagiárias (manhã)`,
+    line: (name, r) =>
+      `• ${name} — ${formatBR(r.day)} (${weekday(r.day)}): vai trabalhar de MANHÃ, em vez de à tarde (mesmo expediente de 5 horas)`,
+    intro: "As seguintes estagiárias marcaram no Hub que vão trabalhar de manhã, em vez de à tarde:",
+    outro: "O horário de manhã vale só nos dias indicados; nos demais dias o expediente continua à tarde.",
+  },
+];
+
+// Processa uma tabela: reserva atomicamente as marcações ainda não avisadas e envia
+// UM e-mail. Se algo falhar, libera a reserva para a próxima execução tentar de novo.
+async function processKind(kind: Kind, dryRun: boolean): Promise<Record<string, unknown>> {
   let claimedIds: string[] = [];
   try {
-    let dryRun = false;
-    try {
-      const body = await req.json();
-      dryRun = body?.dryRun === true;
-    } catch (_) { /* corpo vazio */ }
-
     const today = todayBR();
     const pending: { id: string }[] =
-      (await rest(`intern_half_days?select=id&notified_at=is.null&day=gte.${today}`)) || [];
-    if (!pending.length) return json({ sent: false, count: 0 });
-    if (dryRun) return json({ sent: false, dryRun: true, count: pending.length });
+      (await rest(`${kind.table}?select=id&notified_at=is.null${kind.pendingFilter(today)}`)) || [];
+    if (!pending.length) return { table: kind.table, sent: false, count: 0 };
+    if (dryRun) return { table: kind.table, sent: false, dryRun: true, count: pending.length };
 
-    // Reserva atômica: só segue com as marcações que ainda ninguém avisou.
     const ids = pending.map((p) => p.id).join(",");
-    const claimed: { id: string; user_id: string; day: string }[] =
-      (await rest(`intern_half_days?notified_at=is.null&id=in.(${ids})&select=id,user_id,day`, {
+    const claimed: Row[] =
+      (await rest(`${kind.table}?notified_at=is.null&id=in.(${ids})&select=id,user_id,day`, {
         method: "PATCH",
         prefer: "return=representation",
         body: JSON.stringify({ notified_at: new Date().toISOString() }),
       })) || [];
-    if (!claimed.length) return json({ sent: false, already: true });
+    if (!claimed.length) return { table: kind.table, sent: false, already: true };
     claimedIds = claimed.map((c) => c.id);
 
     const userIds = [...new Set(claimed.map((c) => c.user_id))].join(",");
@@ -121,33 +158,38 @@ Deno.serve(async (req) => {
     if (!toEmails.length) throw new Error("sem destinatários");
 
     const sorted = [...claimed].sort((a, b) => a.day.localeCompare(b.day));
-    const lines = sorted
-      .map((c) => `• ${nameOf.get(c.user_id) || "Estagiária"} — ${formatBR(c.day)} (${weekday(c.day)}): meia tarde por causa de prova`)
-      .join("\n");
-    const first = sorted[0];
-    const subject = sorted.length === 1
-      ? `Meio período (prova): ${nameOf.get(first.user_id) || "Estagiária"} em ${formatBR(first.day)}`
-      : `Meio período (prova): ${sorted.length} marcações de estagiárias`;
-    const content = `Olá!\n\nAs seguintes estagiárias marcaram meio período no Hub por causa de prova na faculdade ` +
-      `(Lei do Estágio, art. 10, §2º):\n\n${lines}\n\n` +
-      `As marcações também aparecem no Calendário da equipe.\n\n— Hub Feijó Souza (mensagem automática)`;
+    const lines = sorted.map((c) => kind.line(nameOf.get(c.user_id) || "Estagiária", c)).join("\n");
+    const subject = kind.subject(sorted, nameOf);
+    const content = `Olá!\n\n${kind.intro}\n\n${lines}\n\n${kind.outro}\n\n— Hub Feijó Souza (mensagem automática)`;
 
     const token = await getGraphToken();
     await sendGraphMail(token, toEmails, subject, content);
-    return json({ sent: true, count: claimed.length });
+    return { table: kind.table, sent: true, count: claimed.length };
   } catch (e) {
-    console.error("half-day-email:", e);
-    // Libera a reserva para a próxima execução tentar de novo.
+    console.error(`half-day-email (${kind.table}):`, e);
     if (claimedIds.length) {
       try {
-        await rest(`intern_half_days?id=in.(${claimedIds.join(",")})`, {
+        await rest(`${kind.table}?id=in.(${claimedIds.join(",")})`, {
           method: "PATCH",
           body: JSON.stringify({ notified_at: null }),
         });
       } catch (e2) {
-        console.error("half-day-email (liberar reserva):", e2);
+        console.error(`half-day-email (liberar reserva, ${kind.table}):`, e2);
       }
     }
-    return json({ error: "falha ao processar" }, 500);
+    return { table: kind.table, error: true };
   }
+}
+
+Deno.serve(async (req) => {
+  let dryRun = false;
+  try {
+    const body = await req.json();
+    dryRun = body?.dryRun === true;
+  } catch (_) { /* corpo vazio */ }
+
+  const results = [];
+  for (const kind of KINDS) results.push(await processKind(kind, dryRun));
+  const failed = results.some((r) => r.error);
+  return json({ results }, failed ? 500 : 200);
 });

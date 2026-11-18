@@ -1544,3 +1544,49 @@ drop trigger if exists intern_half_days_notify on public.intern_half_days;
 create trigger intern_half_days_notify
   after insert on public.intern_half_days
   for each statement execute function public.intern_half_days_notify();
+
+-- ----------------------------------------------------------------------------
+-- 31. TROCA DE TURNO DAS ESTAGIÁRIAS (trabalhar de manhã em vez de à tarde)
+-- ----------------------------------------------------------------------------
+-- O expediente das estagiárias é de 5 horas, normalmente à tarde. Quando quiserem
+-- trabalhar de manhã num dia, marcam direto no Hub (sem aprovação, qualquer dia
+-- útil, sem limite de antecedência) e admins/advogados são avisados por e-mail
+-- na hora (função half-day-email, que atende esta tabela e a de meio período).
+create table if not exists public.intern_shift_swaps (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  day date not null,
+  created_at timestamptz not null default now(),
+  notified_at timestamptz,  -- preenchido pela função half-day-email ao avisar a equipe
+  unique (user_id, day),
+  constraint intern_shift_swaps_weekday check (extract(isodow from day) between 1 and 5)
+);
+
+alter table public.intern_shift_swaps enable row level security;
+revoke all on table public.intern_shift_swaps from anon, authenticated;
+grant select, insert, delete on table public.intern_shift_swaps to authenticated;
+grant all on table public.intern_shift_swaps to service_role;
+
+drop policy if exists "intern_shift_swaps_select_all" on public.intern_shift_swaps;
+create policy "intern_shift_swaps_select_all" on public.intern_shift_swaps
+  for select to authenticated using (true);
+
+drop policy if exists "intern_shift_swaps_insert_own" on public.intern_shift_swaps;
+create policy "intern_shift_swaps_insert_own" on public.intern_shift_swaps
+  for insert to authenticated
+  with check (
+    user_id = auth.uid()
+    and exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_intern)
+  );
+
+drop policy if exists "intern_shift_swaps_delete_own" on public.intern_shift_swaps;
+create policy "intern_shift_swaps_delete_own" on public.intern_shift_swaps
+  for delete to authenticated
+  using (user_id = auth.uid());
+
+-- Aviso imediato: reaproveita a função de gatilho do meio período (ela só chama a
+-- função half-day-email, que olha as duas tabelas; o cron de hora em hora é reserva).
+drop trigger if exists intern_shift_swaps_notify on public.intern_shift_swaps;
+create trigger intern_shift_swaps_notify
+  after insert on public.intern_shift_swaps
+  for each statement execute function public.intern_half_days_notify();
