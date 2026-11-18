@@ -468,9 +468,10 @@ async function loadHolidays() {
 // - A partir do 1º de janeiro em que a pessoa já tem mais de 1 ano de casa,
 //   o saldo é zerado e resetado para 22 dias úteis todo santo 1º de janeiro
 //   (independentemente do saldo anterior).
-// - Cada dia útil de férias é descontado do ANO CIVIL em que cai: férias de
+// - Cada período de férias é descontado do ANO CIVIL em que COMEÇA: férias de
 //   fevereiro/2027 saem do saldo de 2027, nunca do de 2026. Férias que
-//   atravessam a virada do ano são divididas entre os dois anos.
+//   atravessam a virada do ano (ex.: 22/12/2026 a 15/01/2027) saem INTEIRAS
+//   do saldo do ano em que começam; o saldo do ano seguinte fica intacto.
 // - Férias recusadas não contam. Férias pendentes de aprovação contam como
 //   "reservadas" (descontam do saldo, mas aparecem separadas).
 // - Os dias não usados de um ano vencem em 31/12 para quem, na virada, já
@@ -519,8 +520,11 @@ function vacationLedger(hireDateIso, vacations, todayIso) {
     let approved = 0;
     let pending = 0;
     counted.forEach((v) => {
+      // Férias que atravessam a virada do ano descontam INTEIRAS do saldo do
+      // ano em que começam (ex.: 22/12/2026 a 15/01/2027 sai todo de 2026).
+      if (Number(v.start_date.split("-")[0]) !== y) return;
       const s = v.start_date > from ? v.start_date : from;
-      const e = v.end_date < dec31 ? v.end_date : dec31;
+      const e = v.end_date;
       if (e < s) return;
       const days = countBusinessDays(s, e);
       if (v.status === "pending") pending += days;
