@@ -1458,8 +1458,8 @@ async function renderVacationBalancesPanel() {
 
   const [{ data: profiles, error: profilesError }, { data: details }, { data: vacs }] = await Promise.all([
     sb.from("profiles").select("id, full_name, email").is("left_at", null).order("full_name"),
-    sb.from("employee_profile_details").select("user_id, hire_date, vacation_balance_days"),
-    sb.from("vacations").select("user_id, start_date, end_date, status"),
+    sb.from("employee_profile_details").select("user_id, hire_date, vacation_balance_days, updated_at"),
+    sb.from("vacations").select("user_id, start_date, end_date, status, created_at, decided_at"),
   ]);
   if (profilesError) {
     box.innerHTML = `<p class="text-sm text-red-500">Erro ao carregar os saldos: ${escapeHtml(profilesError.message)}</p>`;
@@ -1485,7 +1485,8 @@ async function renderVacationBalancesPanel() {
     const ledger = vacationLedger(d.hire_date, mine, todayIso);
     const auto = calcVacationBalance(d.hire_date, mine, todayIso);
     const hasManual = d.vacation_balance_days !== null && d.vacation_balance_days !== undefined;
-    const current = hasManual ? Number(d.vacation_balance_days) : auto;
+    const manual = hasManual ? manualBalanceAfterUse(d, mine, todayIso) : null;
+    const current = hasManual ? manual.value : auto;
     const curRow = ledger.find((r) => r.year === year);
     const nextRow = ledger.find((r) => r.year === year + 1);
     const vestingIso = addMonthsISO(d.hire_date, VACATION_VESTING_MONTHS);
@@ -1497,7 +1498,7 @@ async function renderVacationBalancesPanel() {
       curCell += ` <span class="text-xs text-brand-mist">(período aquisitivo até ${escapeHtml(formatDateBR(vestingIso))})</span>`;
     }
     curCell += hasManual
-      ? ` <span class="text-xs text-amber-600">manual · automático: ${escapeHtml(formatVacationBalance(auto))}</span>`
+      ? ` <span class="text-xs text-amber-600">manual (${escapeHtml(formatVacationBalance(manual.base))}${manual.used ? ` − ${escapeHtml(formatBusinessDays(manual.used))} lançados depois` : ""}) · automático: ${escapeHtml(formatVacationBalance(auto))}</span>`
       : ` <span class="text-xs text-brand-mist">automático</span>`;
     if (!inAcquisitivePeriod && curRow?.expiresDec31 && current > 0) {
       curCell += ` <span class="text-xs text-red-500">vence em 31/12</span>`;
@@ -3710,15 +3711,39 @@ async function setupGiverFeedback() {
   await loadGiverFeedbackList();
 }
 
+// O saldo manual é uma "foto" do saldo no dia em que a administração o salvou
+// (employee_profile_details.updated_at). As férias APROVADAS que começam no ano
+// corrente e foram lançadas/aprovadas DEPOIS dessa foto ainda não estavam
+// contadas nela, então são descontadas aqui, automaticamente. Férias lançadas
+// antes da foto já estão embutidas no valor digitado e não são descontadas de
+// novo. Retorna { base, used, value, savedAt }.
+function manualBalanceAfterUse(details, vacations, todayIso) {
+  const base = Number(details?.vacation_balance_days);
+  const savedAt = details?.updated_at ? Date.parse(details.updated_at) : NaN;
+  const year = String(todayIso || toISODate(new Date())).slice(0, 4);
+  let used = 0;
+  (vacations || []).forEach((v) => {
+    if (v.status !== "approved") return;
+    if (String(v.start_date).slice(0, 4) !== year) return;
+    const stamps = [v.created_at, v.decided_at].filter(Boolean).map((t) => Date.parse(t));
+    if (!stamps.length || Number.isNaN(savedAt)) return;
+    if (Math.max(...stamps) <= savedAt) return;
+    used += countBusinessDays(v.start_date, v.end_date);
+  });
+  return { base, used, value: base - used, savedAt: Number.isNaN(savedAt) ? null : details.updated_at };
+}
+
 // Decide o saldo de férias a exibir: se houver um valor manual cadastrado em
 // employee_profile_details.vacation_balance_days, ele tem prioridade (não
 // sobrescrevemos o que os admins digitaram manualmente); senão, calculamos
 // automaticamente a partir da data de admissão e das férias já registradas.
 // Retorna { value, isManual }.
 function resolveVacationBalance(details, vacations) {
-  const auto = calcVacationBalance(details?.hire_date, vacations, toISODate(new Date()));
+  const todayIso = toISODate(new Date());
+  const auto = calcVacationBalance(details?.hire_date, vacations, todayIso);
   if (details?.vacation_balance_days !== null && details?.vacation_balance_days !== undefined) {
-    return { value: details.vacation_balance_days, isManual: true, auto };
+    const m = manualBalanceAfterUse(details, vacations, todayIso);
+    return { value: m.value, isManual: true, auto, base: m.base, used: m.used, savedAt: m.savedAt };
   }
   return { value: auto, isManual: false, auto };
 }
@@ -3728,7 +3753,7 @@ async function loadProfileTab() {
   const [{ data: myDetails }, { data: myFeedback }, { data: myVacations }] = await Promise.all([
     sb.from("employee_profile_details").select("*").eq("user_id", currentUser.id).maybeSingle(),
     sb.from("feedback_entries").select("*").eq("user_id", currentUser.id).order("created_at", { ascending: false }),
-    sb.from("vacations").select("start_date, end_date, status").eq("user_id", currentUser.id),
+    sb.from("vacations").select("start_date, end_date, status, created_at, decided_at").eq("user_id", currentUser.id),
   ]);
 
   document.getElementById("profile-hire-date").textContent = myDetails?.hire_date
@@ -3745,7 +3770,7 @@ async function loadProfileTab() {
       subEl.textContent = "";
     } else {
       const source = resolvedBalance.isManual
-        ? `Valor definido manualmente pela administração (o cálculo automático daria ${formatVacationBalance(resolvedBalance.auto)})`
+        ? `Valor definido manualmente pela administração${resolvedBalance.used ? ` (${formatVacationBalance(resolvedBalance.base)} menos ${formatBusinessDays(resolvedBalance.used)} de férias lançadas depois)` : ""}; o cálculo automático daria ${formatVacationBalance(resolvedBalance.auto)}`
         : "Calculado automaticamente a partir da data de admissão";
       const breakdown = describeVacationLedger(vacationLedger(myDetails.hire_date, myVacations || [], toISODate(new Date())));
       subEl.textContent = breakdown ? `${source}\n${breakdown}` : source;
@@ -3801,7 +3826,7 @@ async function loadProfileEditorFor(userId) {
   const [{ data: details }, { data: feedback }, { data: vacations }] = await Promise.all([
     sb.from("employee_profile_details").select("*").eq("user_id", userId).maybeSingle(),
     sb.from("feedback_entries").select("*").eq("user_id", userId).order("created_at", { ascending: false }),
-    sb.from("vacations").select("start_date, end_date, status").eq("user_id", userId),
+    sb.from("vacations").select("start_date, end_date, status, created_at, decided_at").eq("user_id", userId),
   ]);
 
   document.getElementById("profile-editor-hire-date").value = details?.hire_date || "";
@@ -3829,7 +3854,13 @@ async function loadProfileEditorFor(userId) {
       const unsaved = raw !== savedManualRaw ? " (alteração ainda não salva)" : "";
       let main;
       if (hasManual) {
-        main = `VALENDO para a pessoa (saldo de ${hintYear}): ${formatVacationBalance(Number(raw))}, definido manualmente${unsaved}. O cálculo automático daria ${autoText}. Apague o campo e salve para voltar ao automático.`;
+        const usedAfter = raw === savedManualRaw
+          ? manualBalanceAfterUse(details, vacations || [], todayIso)
+          : { value: Number(raw), used: 0 };
+        const afterTxt = usedAfter.used
+          ? `${formatVacationBalance(usedAfter.value)} (manual ${formatVacationBalance(Number(raw))} menos ${formatBusinessDays(usedAfter.used)} de férias lançadas depois de o manual ser salvo)`
+          : formatVacationBalance(Number(raw));
+        main = `VALENDO para a pessoa (saldo de ${hintYear}): ${afterTxt}, definido manualmente${unsaved}. O cálculo automático daria ${autoText}. Apague o campo e salve para voltar ao automático.`;
       } else if (autoCalc === null) {
         main = `Sem data de admissão cadastrada: não há cálculo automático. Preencha a data de admissão ou digite um saldo manual${unsaved}.`;
       } else {
