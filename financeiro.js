@@ -289,6 +289,13 @@
   // Estados das caixinhas: 0 = não, 1 = parcial, 2 = sim.
   const recvState = (r) => { const b = Number(r.billed) || 0, v = Number(r.received) || 0; return v <= 0 ? 0 : v >= b ? 2 : 1; };
   const paidState = (e) => { const p = Number(e.planned) || 0, x = Number(e.executed) || 0; return x === 0 ? 0 : Math.abs(x) >= Math.abs(p) ? 2 : 1; };
+  const fmtDate = (iso) => (iso ? String(iso).split("-").reverse().join("/") : "");
+  const isPendingReimb = (e) => !!e.paid_by && !e.reimbursed_on && (Number(e.executed) || 0) !== 0;
+  const reimbCell = (e) => {
+    if (!e.paid_by) return "";
+    const done = !!e.reimbursed_on;
+    return `<div class="flex items-center justify-center gap-1.5 whitespace-nowrap">${chk("toggle-reimb", e.id, done ? 2 : 0, `Reembolsado a ${e.paid_by} (grava a data de hoje)`, "")}<span class="text-xs ${done ? "text-brand-slate" : "text-amber-800"}">${esc(e.paid_by)}${done ? ` · ${esc(fmtDate(e.reimbursed_on))}` : ""}</span></div>`;
+  };
   const chk = (act, id, state, label, partialTitle) =>
     `<input type="checkbox" data-fin="${act}" data-id="${id}" ${state === 2 ? "checked" : ""} ${state === 1 ? 'data-indet="1"' : ""} aria-label="${esc(label)}" title="${esc(state === 1 ? partialTitle : label)}" class="w-4 h-4 cursor-pointer" />`;
   const TDC = "px-2 py-1.5 text-center align-top";
@@ -397,21 +404,22 @@
       if (!list.length) continue;
       const sp = sum(list.filter((e) => e.counted), (e) => e.planned);
       const se = sum(list.filter((e) => e.counted), (e) => e.executed);
-      expBody += `<tr class="bg-slate-50"><td class="${TD} font-medium text-brand-navy">${esc(cat.name)}</td><td class="${TDR} font-medium">${money(sp)}</td><td class="${TDR} font-medium">${money(se)}</td><td></td><td></td></tr>`;
+      expBody += `<tr class="bg-slate-50"><td class="${TD} font-medium text-brand-navy">${esc(cat.name)}</td><td class="${TDR} font-medium">${money(sp)}</td><td class="${TDR} font-medium">${money(se)}</td><td></td><td></td><td></td></tr>`;
       expBody += list
         .map(
           (e) => `<tr class="border-t border-slate-100 ${e.counted ? "" : "text-brand-slate bg-slate-50"}">
           <td class="${TD} pl-5">${esc(e.description)}${e.counted ? "" : notCountedBadge}${e.note ? `<div class="text-xs text-brand-slate">${esc(e.note)}</div>` : ""}</td>
           <td class="${TDR}">${money(e.planned)}</td><td class="${TDR}">${money(e.executed)}</td>
           <td class="${TDC}">${chk("toggle-paid", e.id, paidState(e), "Pago (marca o valor planejado como executado)", "Pagamento parcial — clique para marcar como totalmente pago")}</td>
+          <td class="${TDC}">${reimbCell(e)}</td>
           <td class="${TDR}"><button type="button" class="${BTN}" data-fin="edit-exp" data-id="${e.id}">editar</button></td></tr>`
         )
         .join("");
     }
     const expTable = c.exps.length
-      ? tableWrap(`<thead><tr><th class="${TH}">Despesa</th><th class="${THR}">Planejado</th><th class="${THR}">Executado</th><th class="${THC}">Pago</th><th></th></tr></thead>
+      ? tableWrap(`<thead><tr><th class="${TH}">Despesa</th><th class="${THR}">Planejado</th><th class="${THR}">Executado</th><th class="${THC}">Pago</th><th class="${THC}">Reembolso (quem pagou)</th><th></th></tr></thead>
         <tbody>${expBody}</tbody>
-        <tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}">Total</td><td class="${TDR}">${money(c.planned)}</td><td class="${TDR}">${money(c.executed)}</td><td colspan="2" class="${TDR} text-xs text-brand-slate font-normal">A pagar: ${money(r2(c.planned - c.executed))}</td></tr></tfoot>`)
+        <tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}">Total</td><td class="${TDR}">${money(c.planned)}</td><td class="${TDR}">${money(c.executed)}</td><td colspan="3" class="${TDR} text-xs text-brand-slate font-normal">A pagar: ${money(r2(c.planned - c.executed))}</td></tr></tfoot>`)
       : emptyMsg("Nenhuma despesa lançada neste mês.");
     const expSection = section("Despesas por tipo", `<button type="button" data-fin="new-exp" class="btn-primary">Nova despesa</button>`, expTable);
 
@@ -419,7 +427,31 @@
       ? `<p class="text-sm mb-3"><button type="button" data-fin="copy-exp" class="text-brand-navy underline">Copiar as despesas de ${MONTHS[fin.month - 2]} para ${MONTHS[fin.month - 1]}</button> <span class="text-xs text-brand-slate">(copia descrição, tipo e valor planejado; o executado fica zerado)</span></p>`
       : "";
 
-    return picker + cards + revSection + copyBtn + expSection;
+    return picker + cards + reimbSection() + revSection + copyBtn + expSection;
+  }
+
+  // Reembolsos pendentes do ano (compras pagas do bolso de alguém, ainda não devolvidas).
+  function reimbSection() {
+    const pend = fin.expenses.filter(isPendingReimb);
+    const open = pend.length;
+    if (!open) return "";
+    const by = new Map();
+    for (const e of pend) {
+      if (!by.has(e.paid_by)) by.set(e.paid_by, []);
+      by.get(e.paid_by).push(e);
+    }
+    const total = r2(sum(pend, (e) => Number(e.executed)));
+    const blocks = [...by.entries()]
+      .map(([who, list]) => {
+        const sub = r2(sum(list, (e) => Number(e.executed)));
+        const rows = list
+          .map((e) => `<tr class="border-t border-slate-100"><td class="${TD}">${MONTHS[monthOf(e.month) - 1]}</td><td class="${TD}">${esc(e.description)}</td><td class="${TDR}">${money(e.executed)}</td><td class="${TDC}">${chk("toggle-reimb", e.id, 0, `Reembolsado a ${e.paid_by} (grava a data de hoje)`, "")}</td></tr>`)
+          .join("");
+        return `<p class="text-sm font-medium text-brand-navy mt-3 mb-1">A reembolsar a ${esc(who)}: <span class="tabular-nums">${money(sub)}</span></p>` +
+          tableWrap(`<thead><tr><th class="${TH}">Mês</th><th class="${TH}">Compra</th><th class="${THR}">Valor</th><th class="${THC}">Reembolsado</th></tr></thead><tbody>${rows}</tbody>`);
+      })
+      .join("");
+    return section(`Reembolsos pendentes em ${fin.year}: ${money(total)}`, "", `<p class="text-xs text-brand-slate">Compras com “Pago por” preenchido e sem data de reembolso. Marque a caixinha quando devolver (grava a data de hoje; dá para desfazer).</p>${blocks}`);
   }
 
   // --------------------------------------------------------------------------
@@ -622,12 +654,12 @@
     const dRows = fin.dists
       .map(
         (d) => `<tr class="border-t border-slate-100"><td class="${TD}">${MONTHS[monthOf(d.month) - 1]}</td><td class="${TD}">${esc(d.partner)}</td><td class="${TDR}">${money(d.amount)}</td>
-        <td class="${TD} text-xs">${d.paid_on ? esc(String(d.paid_on).split("-").reverse().join("/")) : ""}</td><td class="${TD} text-xs text-brand-slate">${esc(d.note || "")}</td>
+        <td class="${TD} text-xs">${d.paid_on ? esc(String(d.paid_on).split("-").reverse().join("/")) : ""}</td>
         <td class="${TDR}"><button type="button" class="${BTN}" data-fin="edit-dist" data-id="${d.id}">editar</button></td></tr>`
       )
       .join("");
     const dTable = fin.dists.length
-      ? tableWrap(`<thead><tr><th class="${TH}">Mês</th><th class="${TH}">Sócio</th><th class="${THR}">Valor</th><th class="${TH}">Pago em</th><th class="${TH}">Observação</th><th></th></tr></thead><tbody>${dRows}</tbody>`)
+      ? tableWrap(`<thead><tr><th class="${TH}">Mês</th><th class="${TH}">Sócio</th><th class="${THR}">Valor</th><th class="${TH}">Pago em</th><th></th></tr></thead><tbody>${dRows}</tbody>`)
       : emptyMsg("Nenhuma distribuição lançada neste ano.");
 
     const names = [...new Set(fin.reserves.map((r) => r.name))];
@@ -734,6 +766,8 @@
           ${fld("Executado (R$)", moneyInput("f-executed", e.executed ?? 0))}
           ${checkInput("f-paidall", false, "Pago integralmente (executado = planejado)")}
           ${checkInput("f-counted", e.counted !== false, "Somar nos totais do mês")}
+          ${fld("Pago por (deixe em branco se saiu do caixa do escritório)", `<input id="f-paidby" type="text" maxlength="80" list="f-paidby-list" value="${esc(e.paid_by ?? "")}" placeholder="Ex.: Otávio" class="${INPUT} w-full mt-1" /><datalist id="f-paidby-list">${[...new Set(["Otávio", "Ricardo", "Feijó", "Lian", ...fin.expenses.map((x) => x.paid_by).filter(Boolean)])].map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist>`)}
+          ${fld("Reembolsado em (vazio = ainda não reembolsado)", dateInput("f-reimb", e.reimbursed_on))}
         </div>${fld("Observação (opcional)", textArea("f-note", e.note), "mt-3")}`;
         break;
       }
@@ -959,7 +993,10 @@
         const bad = need(p, e);
         if (bad) return fail(bad.err);
         const counted = fchk("f-counted");
-        return { table: "fin_expenses", row: { month: fval("f-month"), description, category_id: catId, planned: p.v ?? 0, executed: fchk("f-paidall") ? p.v ?? 0 : e.v ?? 0, counted, note: cleanNote(fval("f-note"), counted) } };
+        const paidBy = fval("f-paidby") || null;
+        const reimbOn = fval("f-reimb") || null;
+        if (reimbOn && !paidBy) return fail("Para marcar a data de reembolso, informe quem pagou no campo “Pago por”.");
+        return { table: "fin_expenses", row: { month: fval("f-month"), description, category_id: catId, planned: p.v ?? 0, executed: fchk("f-paidall") ? p.v ?? 0 : e.v ?? 0, counted, paid_by: paidBy, reimbursed_on: reimbOn, note: cleanNote(fval("f-note"), counted) } };
       }
       case "month": {
         const g = readMoney("f-goal", "A meta", { min: 0 });
@@ -1095,6 +1132,11 @@
       if (!r) return;
       table = "fin_revenues"; before = { received: r.received }; patch = { received: want ? r.billed : 0 };
       msg = want ? `“${r.client}” marcado como recebido (${money(r.billed)}).` : `Recebimento de “${r.client}” zerado.`;
+    } else if (kind === "reimb") {
+      const e = fin.expenses.find((x) => x.id === id);
+      if (!e) return;
+      table = "fin_expenses"; before = { reimbursed_on: e.reimbursed_on ?? null }; patch = { reimbursed_on: want ? todayIso() : null };
+      msg = want ? `“${e.description}” marcada como reembolsada a ${e.paid_by} (${money(e.executed)}).` : `Reembolso de “${e.description}” desmarcado.`;
     } else {
       const e = fin.expenses.find((x) => x.id === id);
       if (!e) return;
@@ -1252,6 +1294,7 @@
         case "toggle-nf": wrap(quickToggle("nf", id, t)); break;
         case "toggle-recv": wrap(quickToggle("recv", id, t)); break;
         case "toggle-paid": wrap(quickToggle("paid", id, t)); break;
+        case "toggle-reimb": wrap(quickToggle("reimb", id, t)); break;
         case "undo": wrap(undoToggle()); break;
         case "copy-exp": wrap(copyExpenses()); break;
         case "add-cat": case "save-cat": case "delete-cat": catAction(act, id, t); break;
