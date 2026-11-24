@@ -23,6 +23,17 @@
     extraordinario: "Extraordinário",
     novo: "Novo",
   };
+  // Política de Bônus (26/06/2025): a parte financeira vale 40% e depende da meta atingida no semestre.
+  // Abaixo de 60% da meta é o gatilho: não há bônus. O valor guardado já é 0,4 × a faixa.
+  const FIN_TIERS = [
+    [0, "Abaixo de 60% da meta (gatilho não atingido: sem bônus)"],
+    [0.24, "De 60% a 70% da meta (vale 60% dos 40%)"],
+    [0.28, "De 70% a 80% da meta (vale 70% dos 40%)"],
+    [0.32, "De 80% a 90% da meta (vale 80% dos 40%)"],
+    [0.36, "De 90% a 100% da meta (vale 90% dos 40%)"],
+    [0.4, "100% da meta (vale 100% dos 40%)"],
+  ];
+  const finTierOf = (v) => FIN_TIERS.find(([t]) => Math.abs(t - Number(v)) < 1e-9);
   const CRITERIA = [
     ["conduta_individual", "Conduta individual"],
     ["conduta_coletiva", "Conduta coletiva"],
@@ -238,13 +249,15 @@
     const complete = vals.length === CRITERIA.length;
     const finPart = Number(b.financial_part);
     const individual = complete ? (vals.reduce((a, v) => a + Number(v), 0) / 60) * 0.6 : null;
+    const trigger = finPart > 0; // 0 = escritório abaixo de 60% da meta
     let mult = b.multiplier != null ? Number(b.multiplier) : null;
     if (individual != null) mult = individual + finPart;
+    if (!trigger) mult = 0;
     const base = b.base != null ? Number(b.base) : null;
     let value = null;
     if (b.amount_override != null) value = Number(b.amount_override);
     else if (base != null && mult != null) value = r2(base * Number(b.max_multiple) * mult);
-    return { complete, individual, mult, value, base, fromOverride: b.amount_override != null };
+    return { complete, individual, mult, value, base, trigger, finPart, fromOverride: b.amount_override != null };
   }
 
   const bonusPeriods = () => [...new Set(fin.bonus.map((b) => b.period))];
@@ -289,13 +302,6 @@
   // Estados das caixinhas: 0 = não, 1 = parcial, 2 = sim.
   const recvState = (r) => { const b = Number(r.billed) || 0, v = Number(r.received) || 0; return v <= 0 ? 0 : v >= b ? 2 : 1; };
   const paidState = (e) => { const p = Number(e.planned) || 0, x = Number(e.executed) || 0; return x === 0 ? 0 : Math.abs(x) >= Math.abs(p) ? 2 : 1; };
-  const fmtDate = (iso) => (iso ? String(iso).split("-").reverse().join("/") : "");
-  const isPendingReimb = (e) => !!e.paid_by && !e.reimbursed_on && (Number(e.executed) || 0) !== 0;
-  const reimbCell = (e) => {
-    if (!e.paid_by) return "";
-    const done = !!e.reimbursed_on;
-    return `<div class="flex items-center justify-center gap-1.5 whitespace-nowrap">${chk("toggle-reimb", e.id, done ? 2 : 0, `Reembolsado a ${e.paid_by} (grava a data de hoje)`, "")}<span class="text-xs ${done ? "text-brand-slate" : "text-amber-800"}">${esc(e.paid_by)}${done ? ` · ${esc(fmtDate(e.reimbursed_on))}` : ""}</span></div>`;
-  };
   const chk = (act, id, state, label, partialTitle) =>
     `<input type="checkbox" data-fin="${act}" data-id="${id}" ${state === 2 ? "checked" : ""} ${state === 1 ? 'data-indet="1"' : ""} aria-label="${esc(label)}" title="${esc(state === 1 ? partialTitle : label)}" class="w-4 h-4 cursor-pointer" />`;
   const TDC = "px-2 py-1.5 text-center align-top";
@@ -404,22 +410,21 @@
       if (!list.length) continue;
       const sp = sum(list.filter((e) => e.counted), (e) => e.planned);
       const se = sum(list.filter((e) => e.counted), (e) => e.executed);
-      expBody += `<tr class="bg-slate-50"><td class="${TD} font-medium text-brand-navy">${esc(cat.name)}</td><td class="${TDR} font-medium">${money(sp)}</td><td class="${TDR} font-medium">${money(se)}</td><td></td><td></td><td></td></tr>`;
+      expBody += `<tr class="bg-slate-50"><td class="${TD} font-medium text-brand-navy">${esc(cat.name)}</td><td class="${TDR} font-medium">${money(sp)}</td><td class="${TDR} font-medium">${money(se)}</td><td></td><td></td></tr>`;
       expBody += list
         .map(
           (e) => `<tr class="border-t border-slate-100 ${e.counted ? "" : "text-brand-slate bg-slate-50"}">
-          <td class="${TD} pl-5">${esc(e.description)}${e.counted ? "" : notCountedBadge}${e.note ? `<div class="text-xs text-brand-slate">${esc(e.note)}</div>` : ""}</td>
+          <td class="${TD} pl-5">${esc(e.description)}${e.counted ? "" : notCountedBadge}${e.paid_by ? `<div class="text-xs text-amber-800">Reembolsável · pago por ${esc(e.paid_by)}</div>` : ""}${e.note ? `<div class="text-xs text-brand-slate">${esc(e.note)}</div>` : ""}</td>
           <td class="${TDR}">${money(e.planned)}</td><td class="${TDR}">${money(e.executed)}</td>
           <td class="${TDC}">${chk("toggle-paid", e.id, paidState(e), "Pago (marca o valor planejado como executado)", "Pagamento parcial — clique para marcar como totalmente pago")}</td>
-          <td class="${TDC}">${reimbCell(e)}</td>
           <td class="${TDR}"><button type="button" class="${BTN}" data-fin="edit-exp" data-id="${e.id}">editar</button></td></tr>`
         )
         .join("");
     }
     const expTable = c.exps.length
-      ? tableWrap(`<thead><tr><th class="${TH}">Despesa</th><th class="${THR}">Planejado</th><th class="${THR}">Executado</th><th class="${THC}">Pago</th><th class="${THC}">Reembolso (quem pagou)</th><th></th></tr></thead>
+      ? tableWrap(`<thead><tr><th class="${TH}">Despesa</th><th class="${THR}">Planejado</th><th class="${THR}">Executado</th><th class="${THC}">Pago</th><th></th></tr></thead>
         <tbody>${expBody}</tbody>
-        <tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}">Total</td><td class="${TDR}">${money(c.planned)}</td><td class="${TDR}">${money(c.executed)}</td><td colspan="3" class="${TDR} text-xs text-brand-slate font-normal">A pagar: ${money(r2(c.planned - c.executed))}</td></tr></tfoot>`)
+        <tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}">Total</td><td class="${TDR}">${money(c.planned)}</td><td class="${TDR}">${money(c.executed)}</td><td colspan="2" class="${TDR} text-xs text-brand-slate font-normal">A pagar: ${money(r2(c.planned - c.executed))}</td></tr></tfoot>`)
       : emptyMsg("Nenhuma despesa lançada neste mês.");
     const expSection = section("Despesas por tipo", `<button type="button" data-fin="new-exp" class="btn-primary">Nova despesa</button>`, expTable);
 
@@ -427,31 +432,7 @@
       ? `<p class="text-sm mb-3"><button type="button" data-fin="copy-exp" class="text-brand-navy underline">Copiar as despesas de ${MONTHS[fin.month - 2]} para ${MONTHS[fin.month - 1]}</button> <span class="text-xs text-brand-slate">(copia descrição, tipo e valor planejado; o executado fica zerado)</span></p>`
       : "";
 
-    return picker + cards + reimbSection() + revSection + copyBtn + expSection;
-  }
-
-  // Reembolsos pendentes do ano (compras pagas do bolso de alguém, ainda não devolvidas).
-  function reimbSection() {
-    const pend = fin.expenses.filter(isPendingReimb);
-    const open = pend.length;
-    if (!open) return "";
-    const by = new Map();
-    for (const e of pend) {
-      if (!by.has(e.paid_by)) by.set(e.paid_by, []);
-      by.get(e.paid_by).push(e);
-    }
-    const total = r2(sum(pend, (e) => Number(e.executed)));
-    const blocks = [...by.entries()]
-      .map(([who, list]) => {
-        const sub = r2(sum(list, (e) => Number(e.executed)));
-        const rows = list
-          .map((e) => `<tr class="border-t border-slate-100"><td class="${TD}">${MONTHS[monthOf(e.month) - 1]}</td><td class="${TD}">${esc(e.description)}</td><td class="${TDR}">${money(e.executed)}</td><td class="${TDC}">${chk("toggle-reimb", e.id, 0, `Reembolsado a ${e.paid_by} (grava a data de hoje)`, "")}</td></tr>`)
-          .join("");
-        return `<p class="text-sm font-medium text-brand-navy mt-3 mb-1">A reembolsar a ${esc(who)}: <span class="tabular-nums">${money(sub)}</span></p>` +
-          tableWrap(`<thead><tr><th class="${TH}">Mês</th><th class="${TH}">Compra</th><th class="${THR}">Valor</th><th class="${THC}">Reembolsado</th></tr></thead><tbody>${rows}</tbody>`);
-      })
-      .join("");
-    return section(`Reembolsos pendentes em ${fin.year}: ${money(total)}`, "", `<p class="text-xs text-brand-slate">Compras com “Pago por” preenchido e sem data de reembolso. Marque a caixinha quando devolver (grava a data de hoje; dá para desfazer).</p>${blocks}`);
+    return picker + cards + revSection + copyBtn + expSection;
   }
 
   // --------------------------------------------------------------------------
@@ -703,7 +684,7 @@
         return `<tr class="border-t border-slate-100"><td class="${TD}">${esc(b.person)}${b.note ? `<div class="text-xs text-amber-700">${esc(b.note)}</div>` : ""}</td>
           <td class="${TDR}">${money(b.base)}</td>${scoreCells}
           <td class="${TDR}">${c.individual != null ? pctFmt(c.individual) : "—"}</td>
-          <td class="${TDR}">${c.mult != null ? c.mult.toFixed(3).replace(".", ",") : "—"}</td>
+          <td class="${TDR}" title="${c.individual != null ? `Individual ${c.individual.toFixed(3).replace(".", ",")} + financeira ${c.finPart.toFixed(3).replace(".", ",")}` : ""}">${c.trigger ? (c.mult != null ? c.mult.toFixed(3).replace(".", ",") : "—") : '<span class="text-xs text-amber-800">gatilho não atingido</span>'}</td>
           <td class="${TDR} font-medium">${c.value != null ? money(c.value) : "—"}${c.fromOverride ? ' <span class="text-xs text-brand-slate" title="Valor informado manualmente">(manual)</span>' : ""}</td>
           <td class="${TDR}"><button type="button" class="${BTN}" data-fin="edit-bonus" data-id="${b.id}">editar</button></td></tr>`;
       })
@@ -711,7 +692,7 @@
     const table = tableWrap(`<thead><tr><th class="${TH}">Pessoa</th><th class="${THR}">Base</th>${CRITERIA.map(([, l]) => `<th class="${THR}" style="max-width:5rem;white-space:normal">${l}</th>`).join("")}<th class="${THR}">Individual</th><th class="${THR}">Multiplicador</th><th class="${THR}">Valor do bônus</th><th></th></tr></thead>
       <tbody>${rows}</tbody><tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}" colspan="${CRITERIA.length + 4}">Total do período</td><td class="${TDR}">${money(r2(total))}</td><td></td></tr></tfoot>`);
     return section("Bônus da equipe", actions, table +
-      `<p class="text-xs text-brand-slate mt-2">Regra: nota individual = soma das 6 notas (0 a 10) ÷ 60 × 0,6; multiplicador = individual + parte financeira (padrão 0,4); valor = base × máximo de múltiplos (padrão 3) × multiplicador. Passe o mouse sobre uma nota para ver a observação. Quando o valor foi informado manualmente, ele prevalece.</p>`);
+      `<p class="text-xs text-brand-slate mt-2">Regra (Política de Bônus de 26/06/2025): nota individual = soma das 6 notas (0 a 10) ÷ 60 × 0,6; parte financeira = 0,4 × a faixa da meta do semestre (60–70% vale 60%, 70–80% vale 70%, 80–90% vale 80%, 90–100% vale 90%, 100% vale 100%; abaixo de 60% não há bônus); multiplicador = individual + financeira; valor = base (remuneração fixa média dos últimos 6 meses) × máximo de múltiplos (3) × multiplicador. Passe o mouse sobre uma nota para ver a observação. Quando o valor foi informado manualmente, ele prevalece.</p>`);
   }
 
   // --------------------------------------------------------------------------
@@ -766,8 +747,8 @@
           ${fld("Executado (R$)", moneyInput("f-executed", e.executed ?? 0))}
           ${checkInput("f-paidall", false, "Pago integralmente (executado = planejado)")}
           ${checkInput("f-counted", e.counted !== false, "Somar nos totais do mês")}
-          ${fld("Pago por (deixe em branco se saiu do caixa do escritório)", `<input id="f-paidby" type="text" maxlength="80" list="f-paidby-list" value="${esc(e.paid_by ?? "")}" placeholder="Ex.: Otávio" class="${INPUT} w-full mt-1" /><datalist id="f-paidby-list">${[...new Set(["Otávio", "Ricardo", "Feijó", "Lian", ...fin.expenses.map((x) => x.paid_by).filter(Boolean)])].map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist>`)}
-          ${fld("Reembolsado em (vazio = ainda não reembolsado)", dateInput("f-reimb", e.reimbursed_on))}
+          ${checkInput("f-reimbursable", !!e.paid_by, "Reembolsável (alguém pagou do próprio bolso)")}
+          <div id="f-paidby-wrap" class="${e.paid_by ? "" : "hidden"}">${fld("Quem pagou", `<input id="f-paidby" type="text" maxlength="80" list="f-paidby-list" value="${esc(e.paid_by ?? "")}" placeholder="Ex.: Otávio" class="${INPUT} w-full mt-1" /><datalist id="f-paidby-list">${[...new Set(["Otávio", "Ricardo", "Feijó", "Lian", ...fin.expenses.map((x) => x.paid_by).filter(Boolean)])].map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist>`)}</div>
         </div>${fld("Observação (opcional)", textArea("f-note", e.note), "mt-3")}`;
         break;
       }
@@ -828,7 +809,7 @@
           ${fld("Pessoa", text("f-person", b.person, 120))}
           ${fld("Base do bônus (R$)", moneyInput("f-base", b.base))}
           ${fld("Máximo de múltiplos", `<input id="f-maxmult" type="text" inputmode="decimal" value="${esc(String(b.max_multiple ?? 3).replace(".", ","))}" class="${INPUT} w-full mt-1" />`)}
-          ${fld("Parte financeira (0 a 1)", `<input id="f-finpart" type="text" inputmode="decimal" value="${esc(String(b.financial_part ?? 0.4).replace(".", ","))}" class="${INPUT} w-full mt-1" />`)}
+          ${fld("Meta financeira do escritório no semestre (parte financeira)", selectInput("f-finpart", finTierOf(b.financial_part ?? 0.4) ? FIN_TIERS : [...FIN_TIERS, [b.financial_part, `Valor antigo: ${String(b.financial_part).replace(".", ",")} (escolha uma faixa para padronizar)`]], finTierOf(b.financial_part ?? 0.4)?.[0] ?? b.financial_part), "sm:col-span-2")}
           </div>
           <p class="text-sm font-medium text-brand-navy mt-4 mb-1">Notas (0 a 10) e observações</p>
           <div class="grid sm:grid-cols-2 gap-3">
@@ -993,10 +974,9 @@
         const bad = need(p, e);
         if (bad) return fail(bad.err);
         const counted = fchk("f-counted");
-        const paidBy = fval("f-paidby") || null;
-        const reimbOn = fval("f-reimb") || null;
-        if (reimbOn && !paidBy) return fail("Para marcar a data de reembolso, informe quem pagou no campo “Pago por”.");
-        return { table: "fin_expenses", row: { month: fval("f-month"), description, category_id: catId, planned: p.v ?? 0, executed: fchk("f-paidall") ? p.v ?? 0 : e.v ?? 0, counted, paid_by: paidBy, reimbursed_on: reimbOn, note: cleanNote(fval("f-note"), counted) } };
+        const paidBy = fchk("f-reimbursable") ? fval("f-paidby") : "";
+        if (fchk("f-reimbursable") && !paidBy) return fail("Informe quem pagou a despesa reembolsável.");
+        return { table: "fin_expenses", row: { month: fval("f-month"), description, category_id: catId, planned: p.v ?? 0, executed: fchk("f-paidall") ? p.v ?? 0 : e.v ?? 0, counted, paid_by: paidBy || null, note: cleanNote(fval("f-note"), counted) } };
       }
       case "month": {
         const g = readMoney("f-goal", "A meta", { min: 0 });
@@ -1038,7 +1018,8 @@
         if (!period || !person) return fail("Informe o período e a pessoa.");
         const base = readMoney("f-base", "A base", { min: 0 });
         const mx = readDec("f-maxmult", "O máximo de múltiplos", 0.01, 20);
-        const fp = readDec("f-finpart", "A parte financeira", 0, 1);
+        const fpRaw = Number(fval("f-finpart"));
+        const fp = Number.isFinite(fpRaw) && fpRaw >= 0 && fpRaw <= 1 ? { v: fpRaw } : { err: "Escolha a faixa da meta financeira." };
         const mu = readDec("f-mult", "O multiplicador", 0, 20);
         const ov = readMoney("f-override", "O valor manual", { min: 0 });
         const bad = need(base, mx, fp, mu, ov);
@@ -1132,11 +1113,6 @@
       if (!r) return;
       table = "fin_revenues"; before = { received: r.received }; patch = { received: want ? r.billed : 0 };
       msg = want ? `“${r.client}” marcado como recebido (${money(r.billed)}).` : `Recebimento de “${r.client}” zerado.`;
-    } else if (kind === "reimb") {
-      const e = fin.expenses.find((x) => x.id === id);
-      if (!e) return;
-      table = "fin_expenses"; before = { reimbursed_on: e.reimbursed_on ?? null }; patch = { reimbursed_on: want ? todayIso() : null };
-      msg = want ? `“${e.description}” marcada como reembolsada a ${e.paid_by} (${money(e.executed)}).` : `Reembolso de “${e.description}” desmarcado.`;
     } else {
       const e = fin.expenses.find((x) => x.id === id);
       if (!e) return;
@@ -1294,7 +1270,6 @@
         case "toggle-nf": wrap(quickToggle("nf", id, t)); break;
         case "toggle-recv": wrap(quickToggle("recv", id, t)); break;
         case "toggle-paid": wrap(quickToggle("paid", id, t)); break;
-        case "toggle-reimb": wrap(quickToggle("reimb", id, t)); break;
         case "undo": wrap(undoToggle()); break;
         case "copy-exp": wrap(copyExpenses()); break;
         case "add-cat": case "save-cat": case "delete-cat": catAction(act, id, t); break;
@@ -1305,6 +1280,7 @@
       const t = e.target;
       if (t.id === "fin-year") wrap(changeYear(Number(t.value)));
       else if (t.id === "fin-month") setMonth(Number(t.value));
+      else if (t.id === "f-reimbursable") { $("f-paidby-wrap")?.classList.toggle("hidden", !t.checked); if (t.checked) $("f-paidby")?.focus(); }
       else if (t.id === "fin-bonus-period") { fin.bonusPeriod = t.value; renderBody(); }
     });
     document.addEventListener("keydown", (e) => {
