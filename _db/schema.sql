@@ -1568,3 +1568,340 @@ revoke execute on function public.protect_profile_left_at() from public, anon, a
 --   (c) o mesmo para o job 2 com a URL de half-day-email.
 -- Também: login por e-mail do Supabase Auth desligado (o app só usa a Microsoft).
 -- =============================================================================
+
+-- ----------------------------------------------------------------------------
+-- 34. FINANCEIRO — receitas, despesas por tipo, resultados, metas, distribuições,
+--     reservas e bônus
+-- ----------------------------------------------------------------------------
+-- Tudo aqui é visível e editável SOMENTE por administradores (is_admin). As
+-- políticas de RLS são a trava real; esconder o botão no app é só conveniência.
+-- Nenhuma tabela é exposta ao papel "anon". Toda inclusão, alteração e exclusão
+-- fica registrada em fin_audit_log (gatilho), e o histórico só pode ser lido.
+-- Nenhum dado financeiro fica no repositório: os valores vivem só neste banco.
+-- (Depois de 30/10/2026 tabelas novas precisam de GRANT explícito; ver seção 20.)
+
+-- Tipos de despesa (categorias).
+create table if not exists public.fin_categories (
+  id bigint generated always as identity primary key,
+  name text not null unique check (char_length(name) between 1 and 80),
+  sort_order int not null default 0,
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- Receitas do mês: "faturado" = projetado, "recebido" = pago pelo cliente.
+-- "counted" = entra nos totais (linhas que ficaram fora da soma da planilha original
+-- são importadas com counted = false, para os totais baterem com o histórico).
+create table if not exists public.fin_revenues (
+  id bigint generated always as identity primary key,
+  month date not null check (extract(day from month) = 1),
+  client text not null check (char_length(client) between 1 and 200),
+  billed numeric(14, 2) not null default 0 check (billed >= 0 and billed < 1000000000),
+  received numeric(14, 2) not null default 0 check (received >= 0 and received < 1000000000),
+  invoice_day smallint check (invoice_day is null or invoice_day between 1 and 31),
+  invoice_ok boolean not null default false,
+  client_class text check (client_class is null or client_class in ('extraordinario', 'recorrente_fixo', 'recorrente', 'novo')),
+  counted boolean not null default true,
+  note text check (note is null or char_length(note) <= 1000),
+  created_by uuid default auth.uid() references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists fin_revenues_month_idx on public.fin_revenues (month);
+
+-- Despesas do mês: "projetado" e "executado" (pode ser negativo, ex.: devolução).
+create table if not exists public.fin_expenses (
+  id bigint generated always as identity primary key,
+  month date not null check (extract(day from month) = 1),
+  description text not null check (char_length(description) between 1 and 200),
+  category_id bigint not null references public.fin_categories (id) on delete restrict,
+  planned numeric(14, 2) not null default 0 check (planned > -1000000000 and planned < 1000000000),
+  executed numeric(14, 2) not null default 0 check (executed > -1000000000 and executed < 1000000000),
+  counted boolean not null default true,
+  note text check (note is null or char_length(note) <= 1000),
+  created_by uuid default auth.uid() references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists fin_expenses_month_idx on public.fin_expenses (month);
+create index if not exists fin_expenses_category_idx on public.fin_expenses (category_id);
+
+-- Dados do mês: meta de faturamento e imposto realmente pago (no mês seguinte).
+create table if not exists public.fin_months (
+  month date primary key check (extract(day from month) = 1),
+  revenue_goal numeric(14, 2) check (revenue_goal is null or (revenue_goal >= 0 and revenue_goal < 1000000000)),
+  tax_planned_override numeric(14, 2) check (tax_planned_override is null or (tax_planned_override >= 0 and tax_planned_override < 1000000000)),
+  tax_received_override numeric(14, 2) check (tax_received_override is null or (tax_received_override >= 0 and tax_received_override < 1000000000)),
+  tax_paid numeric(14, 2) check (tax_paid is null or (tax_paid >= 0 and tax_paid < 1000000000)),
+  tax_paid_on date,
+  note text check (note is null or char_length(note) <= 1000),
+  updated_at timestamptz not null default now()
+);
+
+-- Distribuições de lucro (por sócio; a data é opcional).
+create table if not exists public.fin_distributions (
+  id bigint generated always as identity primary key,
+  month date not null check (extract(day from month) = 1),
+  partner text not null check (char_length(partner) between 1 and 80),
+  amount numeric(14, 2) not null check (amount > 0 and amount < 1000000000),
+  paid_on date,
+  note text check (note is null or char_length(note) <= 1000),
+  created_by uuid default auth.uid() references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists fin_distributions_month_idx on public.fin_distributions (month);
+
+-- Reservas e provisionamentos (saldo de cada reserva no fim do mês).
+create table if not exists public.fin_reserves (
+  id bigint generated always as identity primary key,
+  month date not null check (extract(day from month) = 1),
+  name text not null check (char_length(name) between 1 and 120),
+  amount numeric(14, 2) not null check (amount > -1000000000 and amount < 1000000000),
+  note text check (note is null or char_length(note) <= 1000),
+  created_at timestamptz not null default now(),
+  unique (month, name)
+);
+
+-- Meta anual e projeção mensal por cenário.
+create table if not exists public.fin_year_goals (
+  year int primary key check (year between 2000 and 2100),
+  revenue_goal numeric(14, 2) check (revenue_goal is null or (revenue_goal >= 0 and revenue_goal < 100000000000)),
+  margin_goal numeric(5, 4) check (margin_goal is null or (margin_goal >= 0 and margin_goal <= 1)),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.fin_projections (
+  year int not null check (year between 2000 and 2100),
+  month_num smallint not null check (month_num between 1 and 12),
+  scenario text not null check (scenario in ('estabilidade', 'crescimento', 'meta_bonus')),
+  amount numeric(14, 2) not null check (amount >= 0 and amount < 1000000000),
+  primary key (year, month_num, scenario)
+);
+
+-- Bônus da equipe: notas por critério (0 a 10), multiplicador e valor.
+create table if not exists public.fin_bonus (
+  id bigint generated always as identity primary key,
+  period text not null check (char_length(period) between 1 and 60),
+  person text not null check (char_length(person) between 1 and 120),
+  base numeric(14, 2) check (base is null or (base >= 0 and base < 1000000000)),
+  max_multiple numeric(6, 2) not null default 3 check (max_multiple > 0 and max_multiple <= 20),
+  scores jsonb,
+  score_notes jsonb,
+  financial_part numeric(5, 4) not null default 0.4 check (financial_part >= 0 and financial_part <= 1),
+  multiplier numeric(6, 4) check (multiplier is null or (multiplier >= 0 and multiplier <= 20)),
+  amount_override numeric(14, 2) check (amount_override is null or (amount_override >= 0 and amount_override < 1000000000)),
+  note text check (note is null or char_length(note) <= 1000),
+  created_by uuid default auth.uid() references public.profiles (id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (period, person)
+);
+
+-- Configurações (hoje: alíquota estimada do imposto e parte de cada sócio).
+create table if not exists public.fin_settings (
+  key text primary key check (char_length(key) <= 60),
+  value jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
+-- Histórico de tudo que mudou (preenchido por gatilho; só leitura pelo app).
+create table if not exists public.fin_audit_log (
+  id bigint generated always as identity primary key,
+  table_name text not null,
+  row_id text,
+  action text not null,
+  old_data jsonb,
+  new_data jsonb,
+  changed_by uuid,
+  changed_at timestamptz not null default now()
+);
+create index if not exists fin_audit_log_at_idx on public.fin_audit_log (changed_at desc);
+
+-- Carimba "atualizado em" (só nas tabelas que têm essa coluna).
+create or replace function public.fin_touch_updated_at()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+-- Registra no histórico toda inclusão, alteração e exclusão.
+create or replace function public.fin_audit_row()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  rid text;
+begin
+  if tg_op = 'DELETE' then
+    rid := coalesce(to_jsonb(old)->>'id', to_jsonb(old)->>'month', to_jsonb(old)->>'key', to_jsonb(old)->>'year');
+    insert into public.fin_audit_log (table_name, row_id, action, old_data, changed_by)
+    values (tg_table_name, rid, tg_op, to_jsonb(old), auth.uid());
+    return old;
+  elsif tg_op = 'UPDATE' then
+    rid := coalesce(to_jsonb(new)->>'id', to_jsonb(new)->>'month', to_jsonb(new)->>'key', to_jsonb(new)->>'year');
+    insert into public.fin_audit_log (table_name, row_id, action, old_data, new_data, changed_by)
+    values (tg_table_name, rid, tg_op, to_jsonb(old), to_jsonb(new), auth.uid());
+    return new;
+  else
+    rid := coalesce(to_jsonb(new)->>'id', to_jsonb(new)->>'month', to_jsonb(new)->>'key', to_jsonb(new)->>'year');
+    insert into public.fin_audit_log (table_name, row_id, action, new_data, changed_by)
+    values (tg_table_name, rid, tg_op, to_jsonb(new), auth.uid());
+    return new;
+  end if;
+end;
+$$;
+
+revoke execute on function public.fin_touch_updated_at() from public, anon, authenticated;
+revoke execute on function public.fin_audit_row() from public, anon, authenticated;
+
+drop trigger if exists trg_fin_revenues_touch on public.fin_revenues;
+create trigger trg_fin_revenues_touch before update on public.fin_revenues
+  for each row execute function public.fin_touch_updated_at();
+drop trigger if exists trg_fin_expenses_touch on public.fin_expenses;
+create trigger trg_fin_expenses_touch before update on public.fin_expenses
+  for each row execute function public.fin_touch_updated_at();
+drop trigger if exists trg_fin_months_touch on public.fin_months;
+create trigger trg_fin_months_touch before update on public.fin_months
+  for each row execute function public.fin_touch_updated_at();
+drop trigger if exists trg_fin_year_goals_touch on public.fin_year_goals;
+create trigger trg_fin_year_goals_touch before update on public.fin_year_goals
+  for each row execute function public.fin_touch_updated_at();
+drop trigger if exists trg_fin_bonus_touch on public.fin_bonus;
+create trigger trg_fin_bonus_touch before update on public.fin_bonus
+  for each row execute function public.fin_touch_updated_at();
+drop trigger if exists trg_fin_settings_touch on public.fin_settings;
+create trigger trg_fin_settings_touch before update on public.fin_settings
+  for each row execute function public.fin_touch_updated_at();
+
+drop trigger if exists trg_fin_categories_audit on public.fin_categories;
+create trigger trg_fin_categories_audit after insert or update or delete on public.fin_categories
+  for each row execute function public.fin_audit_row();
+drop trigger if exists trg_fin_revenues_audit on public.fin_revenues;
+create trigger trg_fin_revenues_audit after insert or update or delete on public.fin_revenues
+  for each row execute function public.fin_audit_row();
+drop trigger if exists trg_fin_expenses_audit on public.fin_expenses;
+create trigger trg_fin_expenses_audit after insert or update or delete on public.fin_expenses
+  for each row execute function public.fin_audit_row();
+drop trigger if exists trg_fin_months_audit on public.fin_months;
+create trigger trg_fin_months_audit after insert or update or delete on public.fin_months
+  for each row execute function public.fin_audit_row();
+drop trigger if exists trg_fin_distributions_audit on public.fin_distributions;
+create trigger trg_fin_distributions_audit after insert or update or delete on public.fin_distributions
+  for each row execute function public.fin_audit_row();
+drop trigger if exists trg_fin_reserves_audit on public.fin_reserves;
+create trigger trg_fin_reserves_audit after insert or update or delete on public.fin_reserves
+  for each row execute function public.fin_audit_row();
+drop trigger if exists trg_fin_year_goals_audit on public.fin_year_goals;
+create trigger trg_fin_year_goals_audit after insert or update or delete on public.fin_year_goals
+  for each row execute function public.fin_audit_row();
+drop trigger if exists trg_fin_projections_audit on public.fin_projections;
+create trigger trg_fin_projections_audit after insert or update or delete on public.fin_projections
+  for each row execute function public.fin_audit_row();
+drop trigger if exists trg_fin_bonus_audit on public.fin_bonus;
+create trigger trg_fin_bonus_audit after insert or update or delete on public.fin_bonus
+  for each row execute function public.fin_audit_row();
+drop trigger if exists trg_fin_settings_audit on public.fin_settings;
+create trigger trg_fin_settings_audit after insert or update or delete on public.fin_settings
+  for each row execute function public.fin_audit_row();
+
+-- RLS: somente administradores, em todas as operações.
+alter table public.fin_categories enable row level security;
+alter table public.fin_revenues enable row level security;
+alter table public.fin_expenses enable row level security;
+alter table public.fin_months enable row level security;
+alter table public.fin_distributions enable row level security;
+alter table public.fin_reserves enable row level security;
+alter table public.fin_year_goals enable row level security;
+alter table public.fin_projections enable row level security;
+alter table public.fin_bonus enable row level security;
+alter table public.fin_settings enable row level security;
+alter table public.fin_audit_log enable row level security;
+
+drop policy if exists "fin_categories_admin_all" on public.fin_categories;
+create policy "fin_categories_admin_all" on public.fin_categories for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+drop policy if exists "fin_revenues_admin_all" on public.fin_revenues;
+create policy "fin_revenues_admin_all" on public.fin_revenues for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+drop policy if exists "fin_expenses_admin_all" on public.fin_expenses;
+create policy "fin_expenses_admin_all" on public.fin_expenses for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+drop policy if exists "fin_months_admin_all" on public.fin_months;
+create policy "fin_months_admin_all" on public.fin_months for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+drop policy if exists "fin_distributions_admin_all" on public.fin_distributions;
+create policy "fin_distributions_admin_all" on public.fin_distributions for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+drop policy if exists "fin_reserves_admin_all" on public.fin_reserves;
+create policy "fin_reserves_admin_all" on public.fin_reserves for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+drop policy if exists "fin_year_goals_admin_all" on public.fin_year_goals;
+create policy "fin_year_goals_admin_all" on public.fin_year_goals for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+drop policy if exists "fin_projections_admin_all" on public.fin_projections;
+create policy "fin_projections_admin_all" on public.fin_projections for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+drop policy if exists "fin_bonus_admin_all" on public.fin_bonus;
+create policy "fin_bonus_admin_all" on public.fin_bonus for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+drop policy if exists "fin_settings_admin_all" on public.fin_settings;
+create policy "fin_settings_admin_all" on public.fin_settings for all to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+-- O histórico é só leitura pelo app (o gatilho é quem escreve).
+drop policy if exists "fin_audit_log_admin_select" on public.fin_audit_log;
+create policy "fin_audit_log_admin_select" on public.fin_audit_log for select to authenticated
+  using (exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_admin));
+
+grant select, insert, update, delete on table public.fin_categories, public.fin_revenues,
+  public.fin_expenses, public.fin_months, public.fin_distributions, public.fin_reserves,
+  public.fin_year_goals, public.fin_projections, public.fin_bonus, public.fin_settings
+  to authenticated;
+grant select on table public.fin_audit_log to authenticated;
+grant all on table public.fin_categories, public.fin_revenues, public.fin_expenses,
+  public.fin_months, public.fin_distributions, public.fin_reserves, public.fin_year_goals,
+  public.fin_projections, public.fin_bonus, public.fin_settings, public.fin_audit_log
+  to service_role;
+revoke all on table public.fin_categories, public.fin_revenues, public.fin_expenses,
+  public.fin_months, public.fin_distributions, public.fin_reserves, public.fin_year_goals,
+  public.fin_projections, public.fin_bonus, public.fin_settings, public.fin_audit_log
+  from anon;
+revoke insert, update, delete on table public.fin_audit_log from authenticated;
+
+-- Valores iniciais: tipos de despesa e configurações.
+insert into public.fin_categories (name, sort_order) values
+  ('Sócios', 1),
+  ('Equipe', 2),
+  ('Comissões e participações', 3),
+  ('Escritório', 4),
+  ('Sistemas', 5),
+  ('Marketing e eventos', 6),
+  ('Contabilidade', 7),
+  ('Custas e diligências', 8),
+  ('Consumo e material', 9),
+  ('Viagens e reembolsos', 10),
+  ('Outros', 11)
+on conflict (name) do nothing;
+
+insert into public.fin_settings (key, value) values
+  ('tax_rate', '0.12'::jsonb),
+  ('partner_share', '0.5'::jsonb),
+  ('partners', '["Otávio", "Feijó"]'::jsonb)
+on conflict (key) do nothing;
