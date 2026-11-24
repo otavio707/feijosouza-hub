@@ -1905,3 +1905,12 @@ insert into public.fin_settings (key, value) values
   ('partner_share', '0.5'::jsonb),
   ('partners', '["Otávio", "Feijó"]'::jsonb)
 on conflict (key) do nothing;
+
+-- ============================================================================
+-- 35. Financeiro: reembolsos (quem pagou do próprio bolso e se já foi devolvido)
+-- ============================================================================
+-- paid_by: quem pagou a compra (vazio = saiu do caixa do escritório).
+-- reimbursed_on: data em que a pessoa foi reembolsada (vazio = ainda não).
+alter table public.fin_expenses
+  add column if not exists paid_by text check (paid_by is null or char_length(paid_by) between 1 and 80),
+  add column if not exists reimbursed_on date;
