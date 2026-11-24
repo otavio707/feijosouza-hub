@@ -105,10 +105,19 @@
     if (!el) return;
     el.textContent = text;
     el.className =
-      "mb-3 rounded-lg px-3 py-2 text-sm " +
+      "mb-3 rounded-lg px-3 py-2 text-sm sticky top-2 z-40 shadow " +
       (kind === "error" ? "bg-rose-50 text-rose-700 border border-rose-200" : "bg-emerald-50 text-emerald-800 border border-emerald-200");
     clearTimeout(fin.flashTimer);
     fin.flashTimer = setTimeout(() => el.classList.add("hidden"), kind === "error" ? 8000 : 3500);
+  }
+
+  function flashUndo(text) {
+    const el = $("fin-flash");
+    if (!el) return;
+    el.innerHTML = `${esc(text)} <button type="button" data-fin="undo" class="underline ml-2 font-medium">Desfazer</button>`;
+    el.className = "mb-3 rounded-lg px-3 py-2 text-sm sticky top-2 z-40 shadow bg-emerald-50 text-emerald-800 border border-emerald-200";
+    clearTimeout(fin.flashTimer);
+    fin.flashTimer = setTimeout(() => { el.classList.add("hidden"); fin.undo = null; }, 10000);
   }
 
   async function fetchAll(makeQuery) {
@@ -277,6 +286,14 @@
   const emptyMsg = (t) => `<p class="text-sm text-brand-slate">${t}</p>`;
   const notCountedBadge = `<span class="ml-1 rounded bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0.5 whitespace-nowrap" title="Este valor aparece na lista, mas não está somado nos totais do mês (a planilha antiga também não somava). Clique em editar e marque “Somar nos totais do mês” para incluí-lo.">não entra na soma</span>`;
 
+  // Estados das caixinhas: 0 = não, 1 = parcial, 2 = sim.
+  const recvState = (r) => { const b = Number(r.billed) || 0, v = Number(r.received) || 0; return v <= 0 ? 0 : v >= b ? 2 : 1; };
+  const paidState = (e) => { const p = Number(e.planned) || 0, x = Number(e.executed) || 0; return x === 0 ? 0 : Math.abs(x) >= Math.abs(p) ? 2 : 1; };
+  const chk = (act, id, state, label, partialTitle) =>
+    `<input type="checkbox" data-fin="${act}" data-id="${id}" ${state === 2 ? "checked" : ""} ${state === 1 ? 'data-indet="1"' : ""} aria-label="${esc(label)}" title="${esc(state === 1 ? partialTitle : label)}" class="w-4 h-4 cursor-pointer" />`;
+  const TDC = "px-2 py-1.5 text-center align-top";
+  const THC = "px-2 py-1.5 text-xs font-medium text-brand-slate text-center whitespace-nowrap";
+
   // --------------------------------------------------------------------------
   // Casca, abas e seletor de período
   // --------------------------------------------------------------------------
@@ -316,6 +333,7 @@
     if (!el) return;
     const views = { mes: viewMonth, tipo: viewByType, resultados: viewResults, metas: viewGoals, distrib: viewDistrib, bonus: viewBonus };
     el.innerHTML = (views[fin.tab] || viewMonth)();
+    el.querySelectorAll("[data-indet]").forEach((i) => (i.indeterminate = true));
   }
 
   function renderModalHost() {
@@ -360,14 +378,15 @@
         <td class="${TD}">${esc(r.client)}${r.counted ? "" : notCountedBadge}${r.note ? `<div class="text-xs text-brand-slate">${esc(r.note)}</div>` : ""}</td>
         <td class="${TDR}">${money(r.billed)}</td>
         <td class="${TDR}">${money(r.received)}</td>
-        <td class="${TD} text-xs">${r.invoice_day ? "dia " + r.invoice_day : ""} ${r.invoice_ok ? "· NF ok" : ""}</td>
+        <td class="${TDC}">${chk("toggle-nf", r.id, r.invoice_ok ? 2 : 0, "NF enviada", "")}${r.invoice_day ? `<span class="text-xs text-brand-slate ml-1">dia ${r.invoice_day}</span>` : ""}</td>
+        <td class="${TDC}">${chk("toggle-recv", r.id, recvState(r), "Recebido (marca o valor faturado como recebido)", "Recebimento parcial — clique para marcar como totalmente recebido")}</td>
         <td class="${TDR}"><button type="button" class="${BTN}" data-fin="edit-rev" data-id="${r.id}">editar</button></td></tr>`
       )
       .join("");
     const revTable = c.revs.length
-      ? tableWrap(`<thead><tr><th class="${TH}">Cliente</th><th class="${THR}">Faturado</th><th class="${THR}">Recebido</th><th class="${TH}">Nota fiscal</th><th></th></tr></thead>
+      ? tableWrap(`<thead><tr><th class="${TH}">Cliente</th><th class="${THR}">Faturado</th><th class="${THR}">Recebido</th><th class="${THC}">NF enviada</th><th class="${THC}">Recebido</th><th></th></tr></thead>
         <tbody>${revRows}</tbody>
-        <tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}">Total</td><td class="${TDR}">${money(c.billed)}</td><td class="${TDR}">${money(c.received)}</td><td colspan="2"></td></tr></tfoot>`)
+        <tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}">Total</td><td class="${TDR}">${money(c.billed)}</td><td class="${TDR}">${money(c.received)}</td><td colspan="3" class="${TDR} text-xs text-brand-slate font-normal">A receber: ${money(r2(c.billed - c.received))}</td></tr></tfoot>`)
       : emptyMsg("Nenhuma receita lançada neste mês.");
     const revSection = section("Receitas", `<button type="button" data-fin="new-rev" class="btn-primary">Nova receita</button>`, revTable);
 
@@ -378,20 +397,21 @@
       if (!list.length) continue;
       const sp = sum(list.filter((e) => e.counted), (e) => e.planned);
       const se = sum(list.filter((e) => e.counted), (e) => e.executed);
-      expBody += `<tr class="bg-slate-50"><td class="${TD} font-medium text-brand-navy">${esc(cat.name)}</td><td class="${TDR} font-medium">${money(sp)}</td><td class="${TDR} font-medium">${money(se)}</td><td></td></tr>`;
+      expBody += `<tr class="bg-slate-50"><td class="${TD} font-medium text-brand-navy">${esc(cat.name)}</td><td class="${TDR} font-medium">${money(sp)}</td><td class="${TDR} font-medium">${money(se)}</td><td></td><td></td></tr>`;
       expBody += list
         .map(
           (e) => `<tr class="border-t border-slate-100 ${e.counted ? "" : "text-brand-slate bg-slate-50"}">
           <td class="${TD} pl-5">${esc(e.description)}${e.counted ? "" : notCountedBadge}${e.note ? `<div class="text-xs text-brand-slate">${esc(e.note)}</div>` : ""}</td>
           <td class="${TDR}">${money(e.planned)}</td><td class="${TDR}">${money(e.executed)}</td>
+          <td class="${TDC}">${chk("toggle-paid", e.id, paidState(e), "Pago (marca o valor planejado como executado)", "Pagamento parcial — clique para marcar como totalmente pago")}</td>
           <td class="${TDR}"><button type="button" class="${BTN}" data-fin="edit-exp" data-id="${e.id}">editar</button></td></tr>`
         )
         .join("");
     }
     const expTable = c.exps.length
-      ? tableWrap(`<thead><tr><th class="${TH}">Despesa</th><th class="${THR}">Planejado</th><th class="${THR}">Executado</th><th></th></tr></thead>
+      ? tableWrap(`<thead><tr><th class="${TH}">Despesa</th><th class="${THR}">Planejado</th><th class="${THR}">Executado</th><th class="${THC}">Pago</th><th></th></tr></thead>
         <tbody>${expBody}</tbody>
-        <tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}">Total</td><td class="${TDR}">${money(c.planned)}</td><td class="${TDR}">${money(c.executed)}</td><td></td></tr></tfoot>`)
+        <tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}">Total</td><td class="${TDR}">${money(c.planned)}</td><td class="${TDR}">${money(c.executed)}</td><td colspan="2" class="${TDR} text-xs text-brand-slate font-normal">A pagar: ${money(r2(c.planned - c.executed))}</td></tr></tfoot>`)
       : emptyMsg("Nenhuma despesa lançada neste mês.");
     const expSection = section("Despesas por tipo", `<button type="button" data-fin="new-exp" class="btn-primary">Nova despesa</button>`, expTable);
 
@@ -695,7 +715,8 @@
           ${fld("Faturado (R$)", moneyInput("f-billed", r.billed ?? 0))}
           ${fld("Recebido (R$)", moneyInput("f-received", r.received ?? 0))}
           ${fld("Dia da nota fiscal (opcional)", `<input id="f-invday" type="number" min="1" max="31" value="${esc(r.invoice_day ?? "")}" class="${INPUT} w-full mt-1" />`)}
-          ${checkInput("f-invok", r.invoice_ok, "Nota fiscal emitida")}
+          ${checkInput("f-invok", r.invoice_ok, "NF enviada")}
+          ${checkInput("f-recvall", false, "Recebido integralmente (usa o valor faturado)")}
           ${checkInput("f-counted", r.counted !== false, "Somar nos totais do mês")}
         </div>${fld("Observação (opcional)", textArea("f-note", r.note), "mt-3")}`;
         break;
@@ -711,6 +732,7 @@
           ${fld("Descrição", text("f-desc", e.description, 200), "sm:col-span-2")}
           ${fld("Planejado (R$)", moneyInput("f-planned", e.planned ?? 0))}
           ${fld("Executado (R$)", moneyInput("f-executed", e.executed ?? 0))}
+          ${checkInput("f-paidall", false, "Pago integralmente (executado = planejado)")}
           ${checkInput("f-counted", e.counted !== false, "Somar nos totais do mês")}
         </div>${fld("Observação (opcional)", textArea("f-note", e.note), "mt-3")}`;
         break;
@@ -925,7 +947,7 @@
           if (!Number.isInteger(day) || day < 1 || day > 31) return fail("O dia da nota fiscal deve ficar entre 1 e 31.");
         }
         const counted = fchk("f-counted");
-        return { table: "fin_revenues", row: { month: fval("f-month"), client, billed: b.v ?? 0, received: r.v ?? 0, invoice_day: day, invoice_ok: fchk("f-invok"), counted, note: cleanNote(fval("f-note"), counted) } };
+        return { table: "fin_revenues", row: { month: fval("f-month"), client, billed: b.v ?? 0, received: fchk("f-recvall") ? b.v ?? 0 : r.v ?? 0, invoice_day: day, invoice_ok: fchk("f-invok"), counted, note: cleanNote(fval("f-note"), counted) } };
       }
       case "exp": {
         const description = fval("f-desc");
@@ -937,7 +959,7 @@
         const bad = need(p, e);
         if (bad) return fail(bad.err);
         const counted = fchk("f-counted");
-        return { table: "fin_expenses", row: { month: fval("f-month"), description, category_id: catId, planned: p.v ?? 0, executed: e.v ?? 0, counted, note: cleanNote(fval("f-note"), counted) } };
+        return { table: "fin_expenses", row: { month: fval("f-month"), description, category_id: catId, planned: p.v ?? 0, executed: fchk("f-paidall") ? p.v ?? 0 : e.v ?? 0, counted, note: cleanNote(fval("f-note"), counted) } };
       }
       case "month": {
         const g = readMoney("f-goal", "A meta", { min: 0 });
@@ -1054,6 +1076,56 @@
       flash("Lançamento excluído.");
     } catch (e) {
       setModalError("Não foi possível excluir: " + friendlyError(e));
+    } finally {
+      fin.saving = false;
+    }
+  }
+
+  async function quickToggle(kind, id, box) {
+    if (fin.saving) { renderBody(); return; }
+    const want = box.checked;
+    let table, before, patch, msg;
+    if (kind === "nf") {
+      const r = fin.revenues.find((x) => x.id === id);
+      if (!r) return;
+      table = "fin_revenues"; before = { invoice_ok: r.invoice_ok }; patch = { invoice_ok: want };
+      msg = want ? `NF de “${r.client}” marcada como enviada.` : `NF de “${r.client}” desmarcada.`;
+    } else if (kind === "recv") {
+      const r = fin.revenues.find((x) => x.id === id);
+      if (!r) return;
+      table = "fin_revenues"; before = { received: r.received }; patch = { received: want ? r.billed : 0 };
+      msg = want ? `“${r.client}” marcado como recebido (${money(r.billed)}).` : `Recebimento de “${r.client}” zerado.`;
+    } else {
+      const e = fin.expenses.find((x) => x.id === id);
+      if (!e) return;
+      table = "fin_expenses"; before = { executed: e.executed }; patch = { executed: want ? e.planned : 0 };
+      msg = want ? `“${e.description}” marcada como paga (${money(e.planned)}).` : `Pagamento de “${e.description}” zerado.`;
+    }
+    fin.saving = true;
+    try {
+      const { error } = await sb.from(table).update(patch).eq("id", id);
+      if (error) throw error;
+      fin.undo = { table, id, before };
+      await reloadAndRender();
+      flashUndo(msg);
+    } catch (err) {
+      await reloadAndRender().catch(() => {});
+      flash("Não foi possível salvar: " + friendlyError(err), "error");
+    } finally {
+      fin.saving = false;
+    }
+  }
+
+  async function undoToggle() {
+    const u = fin.undo;
+    if (!u || fin.saving) return;
+    fin.saving = true;
+    try {
+      const { error } = await sb.from(u.table).update(u.before).eq("id", u.id);
+      if (error) throw error;
+      fin.undo = null;
+      await reloadAndRender();
+      flash("Desfeito.");
     } finally {
       fin.saving = false;
     }
@@ -1177,6 +1249,10 @@
         case "modal-cancel-delete": fin.modal.confirmDelete = false; renderModalHost(); break;
         case "modal-delete": wrap(deleteModal()); break;
         case "save-proj": wrap(saveProjections()); break;
+        case "toggle-nf": wrap(quickToggle("nf", id, t)); break;
+        case "toggle-recv": wrap(quickToggle("recv", id, t)); break;
+        case "toggle-paid": wrap(quickToggle("paid", id, t)); break;
+        case "undo": wrap(undoToggle()); break;
         case "copy-exp": wrap(copyExpenses()); break;
         case "add-cat": case "save-cat": case "delete-cat": catAction(act, id, t); break;
         default: break;
