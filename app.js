@@ -84,6 +84,7 @@ async function enterApp(user) {
     return;
   }
   if (currentProfile?.is_admin && window.setupCrmTile) window.setupCrmTile();
+  if (currentProfile?.is_admin && window.setupFinanceTile) window.setupFinanceTile();
 
   document.getElementById("welcome-msg").textContent =
     `Olá, ${currentProfile?.full_name || user.email}`;
@@ -136,6 +137,7 @@ function goToPanel(key) {
   if (key === "equipe") renderTeamCalendar().catch((e) => console.error("Calendário:", e));
   if (key === "pedidos") renderRequests().catch((e) => console.error("Pedidos:", e));
   if (key === "comercial" && window.renderCrm) window.renderCrm().catch((e) => console.error("Comercial:", e));
+  if (key === "financeiro" && window.renderFinance) window.renderFinance().catch((e) => console.error("Financeiro:", e));
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
