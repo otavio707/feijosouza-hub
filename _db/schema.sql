@@ -1545,48 +1545,26 @@ create trigger intern_half_days_notify
   after insert on public.intern_half_days
   for each statement execute function public.intern_half_days_notify();
 
--- ----------------------------------------------------------------------------
--- 31. TROCA DE TURNO DAS ESTAGIÁRIAS (trabalhar de manhã em vez de à tarde)
--- ----------------------------------------------------------------------------
--- O expediente das estagiárias é de 5 horas, normalmente à tarde. Quando quiserem
--- trabalhar de manhã num dia, marcam direto no Hub (sem aprovação, qualquer dia
--- útil, sem limite de antecedência) e admins/advogados são avisados por e-mail
--- na hora (função half-day-email, que atende esta tabela e a de meio período).
-create table if not exists public.intern_shift_swaps (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references public.profiles (id) on delete cascade,
-  day date not null,
-  created_at timestamptz not null default now(),
-  notified_at timestamptz,  -- preenchido pela função half-day-email ao avisar a equipe
-  unique (user_id, day),
-  constraint intern_shift_swaps_weekday check (extract(isodow from day) between 1 and 5)
-);
+-- =============================================================================
+-- 32. Auditoria de segurança (menor privilégio) — aplicado em 24/11/2026
+-- Remove permissões que o Hub não usa. Tabelas já têm RLS; isto apenas tira
+-- TRUNCATE/TRIGGER/REFERENCES (que a RLS não controla) dos papéis de API.
+-- =============================================================================
+revoke truncate, trigger, references on all tables in schema public from public, anon, authenticated;
+alter default privileges in schema public revoke truncate, trigger, references on tables from anon, authenticated;
+revoke execute on function public.protect_profile_left_at() from public, anon, authenticated;
 
-alter table public.intern_shift_swaps enable row level security;
-revoke all on table public.intern_shift_swaps from anon, authenticated;
-grant select, insert, delete on table public.intern_shift_swaps to authenticated;
-grant all on table public.intern_shift_swaps to service_role;
-
-drop policy if exists "intern_shift_swaps_select_all" on public.intern_shift_swaps;
-create policy "intern_shift_swaps_select_all" on public.intern_shift_swaps
-  for select to authenticated using (true);
-
-drop policy if exists "intern_shift_swaps_insert_own" on public.intern_shift_swaps;
-create policy "intern_shift_swaps_insert_own" on public.intern_shift_swaps
-  for insert to authenticated
-  with check (
-    user_id = auth.uid()
-    and exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_intern)
-  );
-
-drop policy if exists "intern_shift_swaps_delete_own" on public.intern_shift_swaps;
-create policy "intern_shift_swaps_delete_own" on public.intern_shift_swaps
-  for delete to authenticated
-  using (user_id = auth.uid());
-
--- Aviso imediato: reaproveita a função de gatilho do meio período (ela só chama a
--- função half-day-email, que olha as duas tabelas; o cron de hora em hora é reserva).
-drop trigger if exists intern_shift_swaps_notify on public.intern_shift_swaps;
-create trigger intern_shift_swaps_notify
-  after insert on public.intern_shift_swaps
-  for each statement execute function public.intern_half_days_notify();
+-- =============================================================================
+-- 33. Senha interna das Edge Functions de e-mail — aplicado em 24/11/2026
+-- As funções half-day-email e work-anniversary-email passaram a exigir o cabeçalho
+-- x-hub-secret (variável HUB_FN_SECRET no painel de segredos do Supabase). O valor
+-- NÃO fica neste repositório (que é público): ele existe só no painel de segredos e
+-- no corpo da função intern_half_days_notify() e dos jobs 1 e 2 do pg_cron.
+-- Para recriar: gere um valor aleatório, grave em HUB_FN_SECRET e refaça:
+--   (a) create or replace function public.intern_half_days_notify() com
+--       headers := jsonb_build_object('Content-Type','application/json','x-hub-secret','<VALOR>')
+--   (b) select cron.alter_job(1, command := $c$select net.http_post(url := '.../work-anniversary-email',
+--         headers := jsonb_build_object('Content-Type','application/json','x-hub-secret','<VALOR>'), body := '{}'::jsonb);$c$);
+--   (c) o mesmo para o job 2 com a URL de half-day-email.
+-- Também: login por e-mail do Supabase Auth desligado (o app só usa a Microsoft).
+-- =============================================================================

@@ -8,10 +8,9 @@
 // e-mail a todas as pessoas ativas que não são estagiárias (admins e advogados)
 // pelo Microsoft Graph (mesmas credenciais do Azure das outras funções).
 //
-// Segurança: "Verify JWT" fica DESLIGADO (o projeto usa chaves publishable). O que
-// protege é o desenho: a função não recebe dados de quem chama; o e-mail só vai
-// para o escritório; a reserva por notified_at é atômica, então chamá-la várias
-// vezes não gera e-mail repetido; e a resposta traz apenas contagens.
+// Segurança: "Verify JWT" fica DESLIGADO (o projeto usa chaves publishable) e a função exige o
+// cabeçalho x-hub-secret (senha interna, ver abaixo). A reserva por notified_at/log é
+// atômica e a resposta traz apenas contagens.
 // =============================================================================
 
 const TENANT_ID = Deno.env.get("AZURE_TENANT_ID")!;
@@ -21,6 +20,18 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
 const SENDER = "otavio@feijosouza.com.br";
+
+// Senha interna: o banco e o agendador enviam este cabeçalho em toda chamada. A senha
+// fica só no painel de segredos do Supabase (HUB_FN_SECRET) e dentro do banco; nunca no
+// repositório. Sem ela, a função responde 401 e não faz nada.
+const HUB_FN_SECRET = Deno.env.get("HUB_FN_SECRET") || "";
+function authorized(req: Request): boolean {
+  const got = req.headers.get("x-hub-secret") || "";
+  if (!HUB_FN_SECRET || got.length !== HUB_FN_SECRET.length) return false;
+  let diff = 0;
+  for (let i = 0; i < got.length; i++) diff |= got.charCodeAt(i) ^ HUB_FN_SECRET.charCodeAt(i);
+  return diff === 0;
+}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -182,6 +193,7 @@ async function processKind(kind: Kind, dryRun: boolean): Promise<Record<string, 
 }
 
 Deno.serve(async (req) => {
+  if (!authorized(req)) return json({ error: "não autorizado" }, 401);
   let dryRun = false;
   try {
     const body = await req.json();

@@ -4,12 +4,9 @@
 // casa HOJE, envia UM e-mail aos administradores pelo Microsoft Graph (as mesmas
 // credenciais do Azure da função notify-announcement), com o remetente abaixo.
 //
-// Segurança: este projeto usa chaves "publishable" (não JWT), então a função é
-// publicada com "Verify JWT" DESLIGADO. O que protege é o desenho: o e-mail só
-// vai para administradores, só existe quando há aniversário de casa HOJE e a
-// tabela anniversary_email_log impede que a mesma pessoa gere dois e-mails na
-// mesma data, mesmo que a função seja chamada várias vezes por qualquer um.
-// A resposta traz apenas contagens, nunca nomes ou datas de admissão.
+// Segurança: "Verify JWT" fica DESLIGADO (o projeto usa chaves publishable) e a função exige o
+// cabeçalho x-hub-secret (senha interna, ver abaixo). A reserva por notified_at/log é
+// atômica e a resposta traz apenas contagens.
 // =============================================================================
 
 const TENANT_ID = Deno.env.get("AZURE_TENANT_ID")!;
@@ -20,6 +17,18 @@ const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") || Deno.env.get("SUPAB
 
 // Caixa do escritório de onde sai o e-mail.
 const SENDER = "otavio@feijosouza.com.br";
+
+// Senha interna: o banco e o agendador enviam este cabeçalho em toda chamada. A senha
+// fica só no painel de segredos do Supabase (HUB_FN_SECRET) e dentro do banco; nunca no
+// repositório. Sem ela, a função responde 401 e não faz nada.
+const HUB_FN_SECRET = Deno.env.get("HUB_FN_SECRET") || "";
+function authorized(req: Request): boolean {
+  const got = req.headers.get("x-hub-secret") || "";
+  if (!HUB_FN_SECRET || got.length !== HUB_FN_SECRET.length) return false;
+  let diff = 0;
+  for (let i = 0; i < got.length; i++) diff |= got.charCodeAt(i) ^ HUB_FN_SECRET.charCodeAt(i);
+  return diff === 0;
+}
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -76,6 +85,7 @@ function todayBR(): string {
 }
 
 Deno.serve(async (req) => {
+  if (!authorized(req)) return json({ error: "não autorizado" }, 401);
   let claimed: { user_id: string }[] = [];
   const today = todayBR();
   try {
