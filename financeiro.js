@@ -687,7 +687,7 @@
         return `<tr class="border-t border-slate-100"><td class="${TD}">${esc(b.person)}${b.note ? `<div class="text-xs text-amber-700">${esc(b.note)}</div>` : ""}</td>
           <td class="${TDR}">${money(b.base)}</td>
           <td class="${TDR}" title="${esc(notes)}">${c.individual != null ? pts(c.individual) : "—"}</td>
-          <td class="${TDR}">${c.trigger ? pts(c.finPart) : '<span class="text-xs text-amber-800">gatilho não atingido</span>'}</td>
+          <td class="${TDR}">${c.trigger ? (c.individual != null ? pts(c.finPart) : "—") : '<span class="text-xs text-amber-800">gatilho não atingido</span>'}</td>
           <td class="${TDR} font-medium">${c.trigger && c.mult != null ? sal : c.trigger ? "—" : "0"} <span class="text-xs text-brand-slate font-normal">de ${String(mx).replace(".", ",")}</span></td>
           <td class="${TDR} font-medium">${c.value != null ? money(c.value) : "—"}${c.fromOverride ? ' <span class="text-xs text-brand-slate" title="Valor informado manualmente">(manual)</span>' : ""}</td>
           <td class="${TDR}"><button type="button" class="${BTN}" data-fin="edit-bonus" data-id="${b.id}">editar</button></td></tr>`;
