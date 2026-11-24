@@ -275,7 +275,7 @@
 
   const tableWrap = (inner) => `<div class="overflow-x-auto"><table class="w-full text-sm">${inner}</table></div>`;
   const emptyMsg = (t) => `<p class="text-sm text-brand-slate">${t}</p>`;
-  const notCountedBadge = `<span class="ml-1 rounded bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0.5 whitespace-nowrap" title="Esta linha não entra nos totais (como na planilha original). Edite para incluí-la.">fora dos totais</span>`;
+  const notCountedBadge = `<span class="ml-1 rounded bg-amber-100 text-amber-800 text-[10px] px-1.5 py-0.5 whitespace-nowrap" title="Este valor aparece na lista, mas não está somado nos totais do mês (a planilha antiga também não somava). Clique em editar e marque “Somar nos totais do mês” para incluí-lo.">não entra na soma</span>`;
 
   // --------------------------------------------------------------------------
   // Casca, abas e seletor de período
@@ -335,7 +335,8 @@
       <button type="button" data-fin="month-prev" class="${INPUT}" aria-label="Mês anterior">‹</button>
       <select id="fin-month" class="${INPUT}">${MONTHS.map((n, i) => `<option value="${i + 1}" ${i + 1 === fin.month ? "selected" : ""}>${n} de ${fin.year}</option>`).join("")}</select>
       <button type="button" data-fin="month-next" class="${INPUT}" aria-label="Próximo mês">›</button>
-      <button type="button" data-fin="edit-month" class="ml-auto text-sm text-brand-slate underline">Ajustar meta, imposto e observação do mês</button>
+      <span class="ml-auto flex flex-wrap items-center gap-4"><button type="button" data-fin="edit-taxrate" class="text-sm text-brand-slate underline">Percentual do imposto (${pctFmt(Number(fin.settings.tax_rate))})</button>
+      <button type="button" data-fin="edit-month" class="text-sm text-brand-slate underline">Ajustar meta, imposto e observação do mês</button></span>
     </div>`;
 
     const missing = c.goal != null ? r2(c.goal - c.received) : null;
@@ -357,7 +358,6 @@
       .map(
         (r) => `<tr class="border-t border-slate-100 ${r.counted ? "" : "text-brand-slate bg-slate-50"}">
         <td class="${TD}">${esc(r.client)}${r.counted ? "" : notCountedBadge}${r.note ? `<div class="text-xs text-brand-slate">${esc(r.note)}</div>` : ""}</td>
-        <td class="${TD} text-xs">${esc(CLIENT_CLASSES[r.client_class] || "")}</td>
         <td class="${TDR}">${money(r.billed)}</td>
         <td class="${TDR}">${money(r.received)}</td>
         <td class="${TD} text-xs">${r.invoice_day ? "dia " + r.invoice_day : ""} ${r.invoice_ok ? "· NF ok" : ""}</td>
@@ -365,9 +365,9 @@
       )
       .join("");
     const revTable = c.revs.length
-      ? tableWrap(`<thead><tr><th class="${TH}">Cliente</th><th class="${TH}">Tipo</th><th class="${THR}">Faturado</th><th class="${THR}">Recebido</th><th class="${TH}">Nota fiscal</th><th></th></tr></thead>
+      ? tableWrap(`<thead><tr><th class="${TH}">Cliente</th><th class="${THR}">Faturado</th><th class="${THR}">Recebido</th><th class="${TH}">Nota fiscal</th><th></th></tr></thead>
         <tbody>${revRows}</tbody>
-        <tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}" colspan="2">Total</td><td class="${TDR}">${money(c.billed)}</td><td class="${TDR}">${money(c.received)}</td><td colspan="2"></td></tr></tfoot>`)
+        <tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}">Total</td><td class="${TDR}">${money(c.billed)}</td><td class="${TDR}">${money(c.received)}</td><td colspan="2"></td></tr></tfoot>`)
       : emptyMsg("Nenhuma receita lançada neste mês.");
     const revSection = section("Receitas", `<button type="button" data-fin="new-rev" class="btn-primary">Nova receita</button>`, revTable);
 
@@ -471,7 +471,7 @@
     const head = `<thead><tr><th class="${TH}"></th><th class="${THR}">Faturado</th><th class="${THR}">Recebido</th><th class="${THR}">Imposto</th><th class="${THR}">Desp. planej.</th><th class="${THR}">Desp. exec.</th><th class="${THR}">Lucro</th><th class="${THR}">Por sócio</th><th class="${THR}">Distribuído</th><th class="${THR}">Margem</th></tr></thead>`;
     const table = tableWrap(`${head}<tbody>${rows}${resultRow("1º semestre", semesters[0], "bg-slate-100 font-medium")}${resultRow("2º semestre", semesters[1], "bg-slate-100 font-medium")}${resultRow(`Ano ${fin.year}`, total, "bg-slate-200 font-semibold")}</tbody>`);
     const note = `<p class="text-xs text-brand-slate mt-2">Lucro = recebido − imposto − despesas executadas. O imposto usa o valor realmente pago quando ele foi lançado; caso contrário usa a estimativa (${pctFmt(Number(fin.settings.tax_rate))} do recebido), marcada com <span class="text-amber-600">*</span>. Margem = lucro ÷ recebido. “Por sócio” divide o lucro pela participação de cada sócio.</p>`;
-    return section(`Resultados de ${fin.year}`, "", table + note) + section("Recebido, despesas e lucro por mês", "", resultsChart(list));
+    return section(`Resultados de ${fin.year}`, `<button type="button" data-fin="edit-taxrate" class="text-sm text-brand-slate underline">Percentual do imposto (${pctFmt(Number(fin.settings.tax_rate))})</button>`, table + note) + section("Recebido, despesas e lucro por mês", "", resultsChart(list));
   }
 
   function resultsChart(list) {
@@ -694,10 +694,9 @@
           ${fld("Cliente", text("f-client", r.client, 200))}
           ${fld("Faturado (R$)", moneyInput("f-billed", r.billed ?? 0))}
           ${fld("Recebido (R$)", moneyInput("f-received", r.received ?? 0))}
-          ${fld("Tipo de cliente", selectInput("f-class", [["", "Não informado"], ...Object.entries(CLIENT_CLASSES)], r.client_class || ""))}
           ${fld("Dia da nota fiscal (opcional)", `<input id="f-invday" type="number" min="1" max="31" value="${esc(r.invoice_day ?? "")}" class="${INPUT} w-full mt-1" />`)}
           ${checkInput("f-invok", r.invoice_ok, "Nota fiscal emitida")}
-          ${checkInput("f-counted", r.counted !== false, "Entra nos totais")}
+          ${checkInput("f-counted", r.counted !== false, "Somar nos totais do mês")}
         </div>${fld("Observação (opcional)", textArea("f-note", r.note), "mt-3")}`;
         break;
       }
@@ -712,7 +711,7 @@
           ${fld("Descrição", text("f-desc", e.description, 200), "sm:col-span-2")}
           ${fld("Planejado (R$)", moneyInput("f-planned", e.planned ?? 0))}
           ${fld("Executado (R$)", moneyInput("f-executed", e.executed ?? 0))}
-          ${checkInput("f-counted", e.counted !== false, "Entra nos totais")}
+          ${checkInput("f-counted", e.counted !== false, "Somar nos totais do mês")}
         </div>${fld("Observação (opcional)", textArea("f-note", e.note), "mt-3")}`;
         break;
       }
@@ -783,6 +782,14 @@
           ${fld("Multiplicador manual (usado só se faltar alguma nota)", `<input id="f-mult" type="text" inputmode="decimal" value="${esc(b.multiplier != null ? String(b.multiplier).replace(".", ",") : "")}" class="${INPUT} w-full mt-1" />`)}
           ${fld("Valor informado manualmente (R$, substitui o cálculo)", moneyInput("f-override", b.amount_override))}
           </div>${fld("Observação (opcional)", textArea("f-note", b.note), "mt-3")}`;
+        break;
+      }
+      case "taxrate": {
+        title = "Percentual do imposto";
+        const cur = Number(fin.settings.tax_rate) || 0;
+        inner = `<p class="text-sm text-brand-slate mb-3">O imposto estimado de cada mês é este percentual aplicado sobre o recebido (e o “imposto previsto” é aplicado sobre o faturado). A mudança vale para todos os meses do Hub que não têm imposto informado à mão.</p>
+          <div class="grid sm:grid-cols-2 gap-3">${fld("Percentual do imposto (%)", `<input id="f-rate" type="text" inputmode="decimal" maxlength="6" value="${esc(String(r2(cur * 100)).replace(".", ","))}" placeholder="Ex.: 12" class="${INPUT} w-full mt-1" />`)}</div>
+          <p class="text-xs text-brand-slate mt-3">Não mudam: meses com “Imposto realmente pago” lançado e meses em que você digitou o imposto estimado ou previsto manualmente (em “Ajustar o mês”).</p>`;
         break;
       }
       case "cats": {
@@ -918,7 +925,7 @@
           if (!Number.isInteger(day) || day < 1 || day > 31) return fail("O dia da nota fiscal deve ficar entre 1 e 31.");
         }
         const counted = fchk("f-counted");
-        return { table: "fin_revenues", row: { month: fval("f-month"), client, billed: b.v ?? 0, received: r.v ?? 0, invoice_day: day, invoice_ok: fchk("f-invok"), client_class: fval("f-class") || null, counted, note: cleanNote(fval("f-note"), counted) } };
+        return { table: "fin_revenues", row: { month: fval("f-month"), client, billed: b.v ?? 0, received: r.v ?? 0, invoice_day: day, invoice_ok: fchk("f-invok"), counted, note: cleanNote(fval("f-note"), counted) } };
       }
       case "exp": {
         const description = fval("f-desc");
@@ -952,6 +959,13 @@
         const a = readMoney("f-amount", "O valor", { required: true });
         if (a.err) return fail(a.err);
         return { table: "fin_reserves", row: { month: fval("f-month"), name, amount: a.v, note: fval("f-note") || null } };
+      }
+      case "taxrate": {
+        const raw = fval("f-rate");
+        if (raw === "") return fail("Informe o percentual do imposto.");
+        const rt = readDec("f-rate", "O percentual", 0, 100);
+        if (rt.err) return fail(rt.err);
+        return { table: "fin_settings", conflict: "key", row: { key: "tax_rate", value: Math.round(rt.v * 100) / 10000 } };
       }
       case "yeargoal": {
         const g = readMoney("f-goal", "A meta de receita", { min: 0 });
@@ -1149,6 +1163,7 @@
         case "edit-exp": openModal("exp", id); break;
         case "edit-month": openModal("month", null, { month: t.dataset.month ? Number(t.dataset.month) : fin.month }); break;
         case "edit-yeargoal": openModal("yeargoal"); break;
+        case "edit-taxrate": openModal("taxrate"); break;
         case "new-dist": openModal("dist"); break;
         case "edit-dist": openModal("dist", id); break;
         case "new-res": openModal("res"); break;
