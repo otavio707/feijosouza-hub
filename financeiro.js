@@ -1336,13 +1336,20 @@
     btn.id = "tile-financeiro";
     btn.className = "tile";
     // Sem data-goto de propósito: o botão pode ser criado depois de o app ligar os cliques da navegação.
-    btn.addEventListener("click", () => goToPanel("financeiro"));
+    btn.addEventListener("click", () => {
+      // Ao abrir pelo botão, sempre começa no mês atual (aba Mês).
+      const d = new Date();
+      fin.year = d.getFullYear();
+      fin.month = d.getMonth() + 1;
+      fin.tab = "mes";
+      goToPanel("financeiro");
+    });
     btn.innerHTML = `
       <span class="tile-icon">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M14.8 9.2c-.5-.8-1.5-1.2-2.8-1.2-1.6 0-2.7.8-2.7 2 0 2.8 5.6 1.4 5.6 4.2 0 1.2-1.2 2-2.9 2-1.3 0-2.4-.5-3-1.4M12 6.5V8m0 8v1.5"/></svg>
       </span>
       <span class="tile-title">Financeiro</span>
-      <span class="tile-desc">Receitas, despesas, metas e bônus (administradores)</span>`;
+      <span class="tile-desc">Receitas, despesas, metas e bônus</span>`;
     ref.after(btn);
   }
 
