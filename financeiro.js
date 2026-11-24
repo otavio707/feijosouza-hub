@@ -676,23 +676,27 @@
     if (!periods.length) return section("Bônus da equipe", actions, emptyMsg("Nenhum bônus lançado."));
     const list = fin.bonus.filter((b) => b.period === fin.bonusPeriod);
     let total = 0;
+    const pts = (v) => (Math.round(v * 1000) / 10).toString().replace(".", ",");
     const rows = list
       .map((b) => {
         const c = calcBonus(b);
+        const mx = Number(b.max_multiple) || 3;
         if (c.value != null) total += c.value;
-        const scoreCells = CRITERIA.map(([k]) => `<td class="${TDR}" title="${esc((b.score_notes || {})[k] || "")}">${b.scores?.[k] != null ? b.scores[k] : "—"}</td>`).join("");
+        const notes = CRITERIA.map(([k, l]) => `${l}: ${b.scores?.[k] ?? "—"}`).join(" · ");
+        const sal = c.mult != null ? (Math.round(c.mult * mx * 100) / 100).toString().replace(".", ",") : "—";
         return `<tr class="border-t border-slate-100"><td class="${TD}">${esc(b.person)}${b.note ? `<div class="text-xs text-amber-700">${esc(b.note)}</div>` : ""}</td>
-          <td class="${TDR}">${money(b.base)}</td>${scoreCells}
-          <td class="${TDR}">${c.individual != null ? pctFmt(c.individual) : "—"}</td>
-          <td class="${TDR}" title="${c.individual != null ? `Individual ${c.individual.toFixed(3).replace(".", ",")} + financeira ${c.finPart.toFixed(3).replace(".", ",")}` : ""}">${c.trigger ? (c.mult != null ? c.mult.toFixed(3).replace(".", ",") : "—") : '<span class="text-xs text-amber-800">gatilho não atingido</span>'}</td>
+          <td class="${TDR}">${money(b.base)}</td>
+          <td class="${TDR}" title="${esc(notes)}">${c.individual != null ? pts(c.individual) : "—"}</td>
+          <td class="${TDR}">${c.trigger ? pts(c.finPart) : '<span class="text-xs text-amber-800">gatilho não atingido</span>'}</td>
+          <td class="${TDR} font-medium">${c.trigger && c.mult != null ? sal : c.trigger ? "—" : "0"} <span class="text-xs text-brand-slate font-normal">de ${String(mx).replace(".", ",")}</span></td>
           <td class="${TDR} font-medium">${c.value != null ? money(c.value) : "—"}${c.fromOverride ? ' <span class="text-xs text-brand-slate" title="Valor informado manualmente">(manual)</span>' : ""}</td>
           <td class="${TDR}"><button type="button" class="${BTN}" data-fin="edit-bonus" data-id="${b.id}">editar</button></td></tr>`;
       })
       .join("");
-    const table = tableWrap(`<thead><tr><th class="${TH}">Pessoa</th><th class="${THR}">Base</th>${CRITERIA.map(([, l]) => `<th class="${THR}" style="max-width:5rem;white-space:normal">${l}</th>`).join("")}<th class="${THR}">Individual</th><th class="${THR}">Multiplicador</th><th class="${THR}">Valor do bônus</th><th></th></tr></thead>
-      <tbody>${rows}</tbody><tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}" colspan="${CRITERIA.length + 4}">Total do período</td><td class="${TDR}">${money(r2(total))}</td><td></td></tr></tfoot>`);
+    const table = tableWrap(`<thead><tr><th class="${TH}">Pessoa</th><th class="${THR}">Base (salário médio)</th><th class="${THR}">Individual (até 60)</th><th class="${THR}">Meta financeira (até 40)</th><th class="${THR}">Bônus em salários (máx. 3)</th><th class="${THR}">Valor do bônus</th><th></th></tr></thead>
+      <tbody>${rows}</tbody><tfoot><tr class="border-t-2 border-slate-200 font-medium"><td class="${TD}" colspan="5">Total do período</td><td class="${TDR}">${money(r2(total))}</td><td></td></tr></tfoot>`);
     return section("Bônus da equipe", actions, table +
-      `<p class="text-xs text-brand-slate mt-2">Regra (Política de Bônus de 26/06/2025): nota individual = soma das 6 notas (0 a 10) ÷ 60 × 0,6; parte financeira = 0,4 × a faixa da meta do semestre (60–70% vale 60%, 70–80% vale 70%, 80–90% vale 80%, 90–100% vale 90%, 100% vale 100%; abaixo de 60% não há bônus); multiplicador = individual + financeira; valor = base (remuneração fixa média dos últimos 6 meses) × máximo de múltiplos (3) × multiplicador. Passe o mouse sobre uma nota para ver a observação. Quando o valor foi informado manualmente, ele prevalece.</p>`);
+      `<p class="text-xs text-brand-slate mt-2">O bônus vai de 0 a 3 salários (a base é a remuneração fixa média dos últimos 6 meses). Quanto chega perto de 3 depende de 100 pontos: até 60 da avaliação individual (média das 6 notas × 6) e até 40 da meta financeira do semestre (60–70% da meta vale 60% dos 40 pontos, 70–80% vale 70%, 80–90% vale 80%, 90–100% vale 90%, 100% vale tudo; abaixo de 60% não há bônus). Bônus em salários = 3 × pontos ÷ 100. Passe o mouse sobre a nota individual para ver as 6 notas.</p>`);
   }
 
   // --------------------------------------------------------------------------
@@ -808,7 +812,6 @@
           ${fld("Período", text("f-period", b.period, 60, "Ex.: 1º semestre 2027"))}
           ${fld("Pessoa", text("f-person", b.person, 120))}
           ${fld("Base do bônus (R$)", moneyInput("f-base", b.base))}
-          ${fld("Máximo de múltiplos", `<input id="f-maxmult" type="text" inputmode="decimal" value="${esc(String(b.max_multiple ?? 3).replace(".", ","))}" class="${INPUT} w-full mt-1" />`)}
           ${fld("Meta financeira do escritório no semestre (parte financeira)", selectInput("f-finpart", finTierOf(b.financial_part ?? 0.4) ? FIN_TIERS : [...FIN_TIERS, [b.financial_part, `Valor antigo: ${String(b.financial_part).replace(".", ",")} (escolha uma faixa para padronizar)`]], finTierOf(b.financial_part ?? 0.4)?.[0] ?? b.financial_part), "sm:col-span-2")}
           </div>
           <p class="text-sm font-medium text-brand-navy mt-4 mb-1">Notas (0 a 10) e observações</p>
@@ -816,7 +819,7 @@
           ${CRITERIA.map(([k, l]) => fld(l, `<div class="flex gap-2 mt-1"><input id="f-sc-${k}" type="number" min="0" max="10" value="${esc(sc[k] ?? "")}" class="${INPUT} w-20" /><input id="f-sn-${k}" type="text" maxlength="300" value="${esc(sn[k] || "")}" placeholder="Observação" class="${INPUT} flex-1 min-w-0" /></div>`)).join("")}
           </div>
           <div class="grid sm:grid-cols-2 gap-3 mt-4">
-          ${fld("Multiplicador manual (usado só se faltar alguma nota)", `<input id="f-mult" type="text" inputmode="decimal" value="${esc(b.multiplier != null ? String(b.multiplier).replace(".", ",") : "")}" class="${INPUT} w-full mt-1" />`)}
+          ${fld("Total de pontos de 0 a 100 (use só se faltar alguma das 6 notas)", `<input id="f-mult" type="text" inputmode="decimal" value="${esc(b.multiplier != null ? String(Math.round(b.multiplier * 10000) / 100).replace(".", ",") : "")}" class="${INPUT} w-full mt-1" />`)}
           ${fld("Valor informado manualmente (R$, substitui o cálculo)", moneyInput("f-override", b.amount_override))}
           </div>${fld("Observação (opcional)", textArea("f-note", b.note), "mt-3")}`;
         break;
@@ -1017,12 +1020,12 @@
         const period = fval("f-period"), person = fval("f-person");
         if (!period || !person) return fail("Informe o período e a pessoa.");
         const base = readMoney("f-base", "A base", { min: 0 });
-        const mx = readDec("f-maxmult", "O máximo de múltiplos", 0.01, 20);
-        const fpRaw = Number(fval("f-finpart"));
+                const fpRaw = Number(fval("f-finpart"));
         const fp = Number.isFinite(fpRaw) && fpRaw >= 0 && fpRaw <= 1 ? { v: fpRaw } : { err: "Escolha a faixa da meta financeira." };
-        const mu = readDec("f-mult", "O multiplicador", 0, 20);
+        const mu0 = readDec("f-mult", "O total de pontos", 0, 100);
+        const mu = mu0.err ? mu0 : { v: mu0.v == null ? null : mu0.v / 100 };
         const ov = readMoney("f-override", "O valor manual", { min: 0 });
-        const bad = need(base, mx, fp, mu, ov);
+        const bad = need(base, fp, mu, ov);
         if (bad) return fail(bad.err);
         const scores = {}, notes = {};
         for (const [k, l] of CRITERIA) {
@@ -1035,7 +1038,7 @@
           const nt = fval("f-sn-" + k);
           if (nt) notes[k] = nt;
         }
-        return { table: "fin_bonus", row: { period, person, base: base.v, max_multiple: mx.v ?? 3, financial_part: fp.v ?? 0.4, scores: Object.keys(scores).length ? scores : null, score_notes: Object.keys(notes).length ? notes : null, multiplier: mu.v, amount_override: ov.v, note: fval("f-note") || null } };
+        return { table: "fin_bonus", row: { period, person, base: base.v, max_multiple: 3, financial_part: fp.v ?? 0.4, scores: Object.keys(scores).length ? scores : null, score_notes: Object.keys(notes).length ? notes : null, multiplier: mu.v, amount_override: ov.v, note: fval("f-note") || null } };
       }
       default:
         return fail("Formulário desconhecido.");
