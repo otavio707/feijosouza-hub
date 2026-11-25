@@ -734,7 +734,6 @@
           ${fld("Dia da nota fiscal (opcional)", `<input id="f-invday" type="number" min="1" max="31" value="${esc(r.invoice_day ?? "")}" class="${INPUT} w-full mt-1" />`)}
           ${checkInput("f-invok", r.invoice_ok, "NF enviada")}
           ${checkInput("f-recvall", false, "Recebido integralmente (usa o valor faturado)")}
-          ${checkInput("f-counted", r.counted !== false, "Somar nos totais do mês")}
         </div>${fld("Observação (opcional)", textArea("f-note", r.note), "mt-3")}`;
         break;
       }
@@ -750,7 +749,6 @@
           ${fld("Planejado (R$)", moneyInput("f-planned", e.planned ?? 0))}
           ${fld("Executado (R$)", moneyInput("f-executed", e.executed ?? 0))}
           ${checkInput("f-paidall", false, "Pago integralmente (executado = planejado)")}
-          ${checkInput("f-counted", e.counted !== false, "Somar nos totais do mês")}
           ${checkInput("f-reimbursable", !!e.paid_by, "Reembolsável (alguém pagou do próprio bolso)")}
           <div id="f-paidby-wrap" class="${e.paid_by ? "" : "hidden"}">${fld("Quem pagou", `<input id="f-paidby" type="text" maxlength="80" list="f-paidby-list" value="${esc(e.paid_by ?? "")}" placeholder="Ex.: Otávio" class="${INPUT} w-full mt-1" /><datalist id="f-paidby-list">${[...new Set(["Otávio", "Ricardo", "Feijó", "Lian", ...fin.expenses.map((x) => x.paid_by).filter(Boolean)])].map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist>`)}</div>
         </div>${fld("Observação (opcional)", textArea("f-note", e.note), "mt-3")}`;
@@ -964,7 +962,7 @@
           day = Number(dayRaw);
           if (!Number.isInteger(day) || day < 1 || day > 31) return fail("O dia da nota fiscal deve ficar entre 1 e 31.");
         }
-        const counted = fchk("f-counted");
+        const counted = true; // tudo entra nos totais
         return { table: "fin_revenues", row: { month: fval("f-month"), client, billed: b.v ?? 0, received: fchk("f-recvall") ? b.v ?? 0 : r.v ?? 0, invoice_day: day, invoice_ok: fchk("f-invok"), counted, note: cleanNote(fval("f-note"), counted) } };
       }
       case "exp": {
@@ -976,7 +974,7 @@
         const e = readMoney("f-executed", "O executado");
         const bad = need(p, e);
         if (bad) return fail(bad.err);
-        const counted = fchk("f-counted");
+        const counted = true; // tudo entra nos totais
         const paidBy = fchk("f-reimbursable") ? fval("f-paidby") : "";
         if (fchk("f-reimbursable") && !paidBy) return fail("Informe quem pagou a despesa reembolsável.");
         return { table: "fin_expenses", row: { month: fval("f-month"), description, category_id: catId, planned: p.v ?? 0, executed: fchk("f-paidall") ? p.v ?? 0 : e.v ?? 0, counted, paid_by: paidBy || null, note: cleanNote(fval("f-note"), counted) } };
