@@ -107,6 +107,11 @@
   }
 
   const monthIso = (year, m) => `${year}-${String(m).padStart(2, "0")}-01`;
+  const addMonths = (iso, k) => {
+    const y = Number(iso.slice(0, 4));
+    const m = Number(iso.slice(5, 7)) - 1 + k;
+    return monthIso(y + Math.floor(m / 12), (m % 12) + 1);
+  };
   const monthOf = (iso) => Number(String(iso).slice(5, 7));
   const sum = (arr, f) => r2(arr.reduce((a, x) => a + (Number(f(x)) || 0), 0));
   const todayIso = () => toISODate(new Date());
@@ -317,6 +322,7 @@
         <h2 class="font-heading text-lg font-semibold text-brand-navy mr-auto">Financeiro</h2>
         <label class="text-sm text-brand-slate flex items-center gap-1.5">Ano
           <select id="fin-year" class="${INPUT}"></select></label>
+        <button type="button" data-fin="export-xlsx" class="text-sm text-brand-slate underline">Baixar planilha (Excel)</button>
         <button type="button" data-fin="refresh" class="text-sm text-brand-slate underline">Atualizar</button>
       </div>
       <p class="text-xs text-brand-slate mb-3">Visível e editável somente por administradores. Todas as alterações ficam registradas.</p>
@@ -367,6 +373,7 @@
       <select id="fin-month" class="${INPUT}">${MONTHS.map((n, i) => `<option value="${i + 1}" ${i + 1 === fin.month ? "selected" : ""}>${n} de ${fin.year}</option>`).join("")}</select>
       <button type="button" data-fin="month-next" class="${INPUT}" aria-label="Próximo mês">›</button>
       <span class="ml-auto flex flex-wrap items-center gap-4"><button type="button" data-fin="edit-taxrate" class="text-sm text-brand-slate underline">Percentual do imposto (${pctFmt(Number(fin.settings.tax_rate))})</button>
+      ${c.exps.some((e) => e.is_fixed) || c.revs.some((r) => r.is_fixed) ? `<button type="button" data-fin="edit-fixed" class="text-sm text-brand-slate underline">Copiar fixas para os meses seguintes</button>` : ""}
       <button type="button" data-fin="edit-month" class="text-sm text-brand-slate underline">Ajustar meta, imposto e observação do mês</button></span>
     </div>`;
 
@@ -708,6 +715,10 @@
   const moneyInput = (id, val, ph = "Ex.: 4.500,00") => `<input id="${id}" type="text" inputmode="decimal" maxlength="16" value="${esc(moneyIn(val))}" placeholder="${esc(ph)}" class="${INPUT} w-full mt-1" />`;
   const dateInput = (id, val) => `<input id="${id}" type="date" value="${esc(val || "")}" class="${INPUT} w-full mt-1" />`;
   const selectInput = (id, options, cur) => `<select id="${id}" class="${INPUT} w-full mt-1">${options.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(cur) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+  const instWrap = (what) => `<div id="f-inst-wrap" class="hidden sm:col-span-2"><div class="grid sm:grid-cols-2 gap-3">
+      ${fld("Número de parcelas", `<input id="f-inst-n" type="number" min="2" max="60" value="12" class="${INPUT} w-full mt-1" />`)}
+      ${fld("Esta é a parcela nº", `<input id="f-inst-start" type="number" min="1" max="60" value="1" class="${INPUT} w-full mt-1" />`)}</div>
+      <p class="text-xs text-brand-slate mt-2">O Hub cria uma ${what} por mês, a partir do mês escolhido, com o mesmo valor e “1/12”, “2/12”… no nome.</p></div>`;
   const checkInput = (id, checked, label) => `<label class="flex items-center gap-2 text-sm text-brand-navy mt-5"><input id="${id}" type="checkbox" ${checked ? "checked" : ""} /> ${label}</label>`;
   const textArea = (id, val, max = 1000) => `<textarea id="${id}" rows="2" maxlength="${max}" class="${INPUT} w-full mt-1">${esc(val ?? "")}</textarea>`;
   const monthOptions = () => MONTHS.map((n, i) => [monthIso(fin.year, i + 1), `${n} de ${fin.year}`]);
@@ -734,6 +745,9 @@
           ${fld("Dia da nota fiscal (opcional)", `<input id="f-invday" type="number" min="1" max="31" value="${esc(r.invoice_day ?? "")}" class="${INPUT} w-full mt-1" />`)}
           ${checkInput("f-invok", r.invoice_ok, "NF enviada")}
           ${checkInput("f-recvall", false, "Recebido integralmente (usa o valor faturado)")}
+          ${checkInput("f-fixed", !!r.is_fixed, "Fixa (se repete todo mês)")}
+          ${isNew ? checkInput("f-installment", false, "Parcelada") : ""}
+          ${isNew ? instWrap("receita") : ""}
         </div>${fld("Observação (opcional)", textArea("f-note", r.note), "mt-3")}`;
         break;
       }
@@ -751,6 +765,9 @@
           ${checkInput("f-paidall", false, "Pago integralmente (executado = planejado)")}
           ${checkInput("f-reimbursable", !!e.paid_by, "Reembolsável (alguém pagou do próprio bolso)")}
           <div id="f-paidby-wrap" class="${e.paid_by ? "" : "hidden"}">${fld("Quem pagou", `<input id="f-paidby" type="text" maxlength="80" list="f-paidby-list" value="${esc(e.paid_by ?? "")}" placeholder="Ex.: Otávio" class="${INPUT} w-full mt-1" /><datalist id="f-paidby-list">${[...new Set(["Otávio", "Ricardo", "Feijó", "Lian", ...fin.expenses.map((x) => x.paid_by).filter(Boolean)])].map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist>`)}</div>
+          ${checkInput("f-fixed", !!e.is_fixed, "Fixa (se repete todo mês)")}
+          ${isNew ? checkInput("f-installment", false, "Parcelada") : ""}
+          ${isNew ? instWrap("despesa") : ""}
         </div>${fld("Observação (opcional)", textArea("f-note", e.note), "mt-3")}`;
         break;
       }
@@ -828,6 +845,23 @@
         inner = `<p class="text-sm text-brand-slate mb-3">O imposto estimado de cada mês é este percentual aplicado sobre o recebido (e o “imposto previsto” é aplicado sobre o faturado). A mudança vale para todos os meses do Hub que não têm imposto informado à mão.</p>
           <div class="grid sm:grid-cols-2 gap-3">${fld("Percentual do imposto (%)", `<input id="f-rate" type="text" inputmode="decimal" maxlength="6" value="${esc(String(r2(cur * 100)).replace(".", ","))}" placeholder="Ex.: 12" class="${INPUT} w-full mt-1" />`)}</div>
           <p class="text-xs text-brand-slate mt-3">Não mudam: meses com “Imposto realmente pago” lançado e meses em que você digitou o imposto estimado ou previsto manualmente (em “Ajustar o mês”).</p>`;
+        break;
+      }
+      case "fixed": {
+        const src = monthIso(fin.year, fin.month);
+        const opts = [];
+        for (let k = 1; k <= 24; k++) {
+          const iso = addMonths(src, k);
+          opts.push([iso, `${MONTHS[monthOf(iso) - 1]} de ${iso.slice(0, 4)}`]);
+          if (iso === monthIso(fin.year + 1, 12)) break;
+        }
+        const nE = fin.expenses.filter((x) => monthOf(x.month) === fin.month && x.is_fixed).length;
+        const nR = fin.revenues.filter((x) => monthOf(x.month) === fin.month && x.is_fixed).length;
+        title = `Copiar fixas de ${MONTHS[fin.month - 1]} de ${fin.year}`;
+        saveLabel = "Copiar";
+        inner = `<p class="text-sm text-brand-slate mb-3">Copia para os meses seguintes as despesas e receitas marcadas como <strong>fixas</strong> neste mês, com o valor planejado/faturado. O executado e o recebido ficam zerados, e o que já existe em cada mês não é duplicado.</p>
+          ${fld("Copiar até", selectInput("f-until", opts, monthIso(fin.year + 1, 12)))}
+          <p class="text-xs text-brand-slate mt-3">Neste mês há ${nE} despesas fixas e ${nR} receitas fixas.</p>`;
         break;
       }
       case "cats": {
@@ -943,7 +977,16 @@
     return { v: n };
   }
 
-  // Monta { table, row, conflict? } ou { error } para o formulário aberto.
+  // Parcelamento: devolve null (não parcelado), { err } ou { n, s } (total de parcelas e parcela inicial).
+  function readInst() {
+    if (!fchk("f-installment")) return null;
+    const n = Number(fval("f-inst-n")), st = Number(fval("f-inst-start") || 1);
+    if (!Number.isInteger(n) || n < 2 || n > 60) return { err: "O número de parcelas deve ficar entre 2 e 60." };
+    if (!Number.isInteger(st) || st < 1 || st > n) return { err: "A parcela inicial deve ficar entre 1 e o número de parcelas." };
+    return { n, s: st };
+  }
+
+  // Monta { table, row | rows, conflict? } ou { error } para o formulário aberto.
   function buildSave() {
     const md = fin.modal;
     const fail = (e) => ({ error: e });
@@ -963,7 +1006,17 @@
           if (!Number.isInteger(day) || day < 1 || day > 31) return fail("O dia da nota fiscal deve ficar entre 1 e 31.");
         }
         const counted = true; // tudo entra nos totais
-        return { table: "fin_revenues", row: { month: fval("f-month"), client, billed: b.v ?? 0, received: fchk("f-recvall") ? b.v ?? 0 : r.v ?? 0, invoice_day: day, invoice_ok: fchk("f-invok"), counted, note: cleanNote(fval("f-note"), counted) } };
+        const inst = readInst();
+        if (inst?.err) return fail(inst.err);
+        if (inst) {
+          const rows = [];
+          for (let i = inst.s; i <= inst.n; i++) {
+            const off = i - inst.s;
+            rows.push({ month: addMonths(fval("f-month"), off), client: `${client} ${i}/${inst.n}`, billed: b.v ?? 0, received: off === 0 ? (fchk("f-recvall") ? b.v ?? 0 : r.v ?? 0) : 0, invoice_day: day, invoice_ok: off === 0 && fchk("f-invok"), counted, is_fixed: false, note: off === 0 ? cleanNote(fval("f-note"), counted) : null });
+          }
+          return { table: "fin_revenues", rows };
+        }
+        return { table: "fin_revenues", row: { month: fval("f-month"), client, billed: b.v ?? 0, received: fchk("f-recvall") ? b.v ?? 0 : r.v ?? 0, invoice_day: day, invoice_ok: fchk("f-invok"), counted, is_fixed: fchk("f-fixed"), note: cleanNote(fval("f-note"), counted) } };
       }
       case "exp": {
         const description = fval("f-desc");
@@ -977,7 +1030,17 @@
         const counted = true; // tudo entra nos totais
         const paidBy = fchk("f-reimbursable") ? fval("f-paidby") : "";
         if (fchk("f-reimbursable") && !paidBy) return fail("Informe quem pagou a despesa reembolsável.");
-        return { table: "fin_expenses", row: { month: fval("f-month"), description, category_id: catId, planned: p.v ?? 0, executed: fchk("f-paidall") ? p.v ?? 0 : e.v ?? 0, counted, paid_by: paidBy || null, note: cleanNote(fval("f-note"), counted) } };
+        const inst = readInst();
+        if (inst?.err) return fail(inst.err);
+        if (inst) {
+          const rows = [];
+          for (let i = inst.s; i <= inst.n; i++) {
+            const off = i - inst.s;
+            rows.push({ month: addMonths(fval("f-month"), off), description: `${description} ${i}/${inst.n}`, category_id: catId, planned: p.v ?? 0, executed: off === 0 ? (fchk("f-paidall") ? p.v ?? 0 : e.v ?? 0) : 0, counted, paid_by: paidBy || null, is_fixed: false, note: off === 0 ? cleanNote(fval("f-note"), counted) : null });
+          }
+          return { table: "fin_expenses", rows };
+        }
+        return { table: "fin_expenses", row: { month: fval("f-month"), description, category_id: catId, planned: p.v ?? 0, executed: fchk("f-paidall") ? p.v ?? 0 : e.v ?? 0, counted, paid_by: paidBy || null, is_fixed: fchk("f-fixed"), note: cleanNote(fval("f-note"), counted) } };
       }
       case "month": {
         const g = readMoney("f-goal", "A meta", { min: 0 });
@@ -1053,6 +1116,7 @@
   async function saveModal() {
     const md = fin.modal;
     if (!md || fin.saving) return;
+    if (md.kind === "fixed") return runCopyFixed();
     const built = buildSave();
     if (built.error) return setModalError(built.error);
     setModalError(null);
@@ -1061,7 +1125,8 @@
     if (btn) btn.disabled = true;
     try {
       let q;
-      if (built.conflict) q = sb.from(built.table).upsert(built.row, { onConflict: built.conflict });
+      if (built.rows) q = sb.from(built.table).insert(built.rows);
+      else if (built.conflict) q = sb.from(built.table).upsert(built.row, { onConflict: built.conflict });
       else if (md.id != null) q = sb.from(built.table).update(built.row).eq("id", md.id);
       else q = sb.from(built.table).insert(built.row);
       const { error } = await q;
@@ -1070,7 +1135,10 @@
       fin.modal = null;
       await reloadAndRender();
       renderModalHost();
-      flash("Salvo.");
+      if (built.rows) {
+        const last = built.rows[built.rows.length - 1].month;
+        flash(`${built.rows.length} parcelas lançadas, de ${MONTHS_SHORT[monthOf(built.rows[0].month) - 1]}/${built.rows[0].month.slice(0, 4)} até ${MONTHS_SHORT[monthOf(last) - 1]}/${last.slice(0, 4)}.`);
+      } else flash("Salvo.");
     } catch (e) {
       setModalError("Não foi possível salvar: " + friendlyError(e));
     } finally {
@@ -1262,6 +1330,8 @@
         case "new-bonus": openModal("bonus"); break;
         case "edit-bonus": openModal("bonus", id); break;
         case "edit-cats": openModal("cats"); break;
+        case "edit-fixed": openModal("fixed"); break;
+        case "export-xlsx": try { exportXlsx(); } catch (err) { flash("Não foi possível gerar a planilha: " + (err?.message || err), "error"); } break;
         case "modal-close": closeModal(); break;
         case "modal-save": wrap(saveModal()); break;
         case "modal-ask-delete": fin.modal.confirmDelete = true; renderModalHost(); break;
@@ -1281,7 +1351,11 @@
       const t = e.target;
       if (t.id === "fin-year") wrap(changeYear(Number(t.value)));
       else if (t.id === "fin-month") setMonth(Number(t.value));
-      else if (t.id === "f-reimbursable") { $("f-paidby-wrap")?.classList.toggle("hidden", !t.checked); if (t.checked) $("f-paidby")?.focus(); }
+      else if (t.id === "f-installment") {
+        $("f-inst-wrap")?.classList.toggle("hidden", !t.checked);
+        const fx = $("f-fixed");
+        if (fx) { if (t.checked) fx.checked = false; fx.disabled = t.checked; }
+      } else if (t.id === "f-reimbursable") { $("f-paidby-wrap")?.classList.toggle("hidden", !t.checked); if (t.checked) $("f-paidby")?.focus(); }
       else if (t.id === "fin-bonus-period") { fin.bonusPeriod = t.value; renderBody(); }
     });
     document.addEventListener("keydown", (e) => {
@@ -1292,6 +1366,206 @@
   // --------------------------------------------------------------------------
   // Entrada
   // --------------------------------------------------------------------------
+
+  // --------------------------------------------------------------------------
+  // Copiar despesas/receitas fixas para os meses seguintes
+  // --------------------------------------------------------------------------
+
+  async function runCopyFixed() {
+    const md = fin.modal;
+    if (!md || fin.saving) return;
+    const until = fval("f-until");
+    const src = monthIso(fin.year, fin.month);
+    if (!until || until <= src) return setModalError("Escolha até que mês copiar.");
+    const srcExp = fin.expenses.filter((e) => monthOf(e.month) === fin.month && e.is_fixed);
+    const srcRev = fin.revenues.filter((r) => monthOf(r.month) === fin.month && r.is_fixed);
+    if (!srcExp.length && !srcRev.length) return setModalError("Neste mês não há nada marcado como fixo.");
+    const months = [];
+    for (let k = 1; k <= 36; k++) {
+      const iso = addMonths(src, k);
+      months.push(iso);
+      if (iso === until) break;
+    }
+    const first = months[0], after = addMonths(until, 1);
+    const key = (m, t) => `${m}|${String(t).trim().toLowerCase()}`;
+    setModalError(null);
+    fin.saving = true;
+    const btn = document.querySelector('[data-fin="modal-save"]');
+    if (btn) btn.disabled = true;
+    try {
+      const [haveE, haveR] = await Promise.all([
+        fetchAll(() => sb.from("fin_expenses").select("month,description").gte("month", first).lt("month", after).order("id")),
+        fetchAll(() => sb.from("fin_revenues").select("month,client").gte("month", first).lt("month", after).order("id")),
+      ]);
+      const setE = new Set(haveE.map((x) => key(x.month, x.description)));
+      const setR = new Set(haveR.map((x) => key(x.month, x.client)));
+      const newE = [], newR = [];
+      let skipped = 0;
+      for (const m of months) {
+        for (const e of srcExp) {
+          if (setE.has(key(m, e.description))) { skipped++; continue; }
+          newE.push({ month: m, description: e.description, category_id: e.category_id, planned: e.planned, executed: 0, counted: true, paid_by: e.paid_by || null, is_fixed: true, note: null });
+        }
+        for (const r of srcRev) {
+          if (setR.has(key(m, r.client))) { skipped++; continue; }
+          newR.push({ month: m, client: r.client, billed: r.billed, received: 0, invoice_day: r.invoice_day ?? null, invoice_ok: false, counted: true, is_fixed: true, note: null });
+        }
+      }
+      for (let i = 0; i < newE.length; i += 400) {
+        const { error } = await sb.from("fin_expenses").insert(newE.slice(i, i + 400));
+        if (error) throw error;
+      }
+      for (let i = 0; i < newR.length; i += 400) {
+        const { error } = await sb.from("fin_revenues").insert(newR.slice(i, i + 400));
+        if (error) throw error;
+      }
+      fin.modal = null;
+      await reloadAndRender();
+      renderModalHost();
+      flash(newE.length + newR.length ? `Criadas ${newE.length} despesas e ${newR.length} receitas em ${months.length} meses${skipped ? ` (${skipped} já existiam)` : ""}.` : "Nada a criar: tudo isso já existe nesses meses.");
+    } catch (e) {
+      setModalError("Não foi possível copiar: " + friendlyError(e));
+    } finally {
+      fin.saving = false;
+      const b2 = document.querySelector('[data-fin="modal-save"]');
+      if (b2) b2.disabled = false;
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Baixar tudo em Excel (.xlsx montado no navegador, sem bibliotecas)
+  // --------------------------------------------------------------------------
+
+  const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  const crc32 = (u8) => {
+    let c = 0xffffffff;
+    for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 255] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  // ZIP sem compressão (método "store"), suficiente para um .xlsx.
+  function zipStore(files) {
+    const enc = new TextEncoder();
+    const parts = [], central = [];
+    let offset = 0;
+    for (const f of files) {
+      const name = enc.encode(f.name), data = f.data, crc = crc32(data);
+      const lh = new DataView(new ArrayBuffer(30));
+      lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true);
+      lh.setUint16(10, 0, true); lh.setUint16(12, 0x21, true); lh.setUint32(14, crc, true);
+      lh.setUint32(18, data.length, true); lh.setUint32(22, data.length, true); lh.setUint16(26, name.length, true); lh.setUint16(28, 0, true);
+      parts.push(new Uint8Array(lh.buffer), name, data);
+      const ch = new DataView(new ArrayBuffer(46));
+      ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true);
+      ch.setUint16(12, 0, true); ch.setUint16(14, 0x21, true); ch.setUint32(16, crc, true);
+      ch.setUint32(20, data.length, true); ch.setUint32(24, data.length, true); ch.setUint16(28, name.length, true);
+      ch.setUint32(42, offset, true);
+      central.push(new Uint8Array(ch.buffer), name);
+      offset += 30 + name.length + data.length;
+    }
+    const cdSize = central.reduce((a, x) => a + x.length, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+    end.setUint32(12, cdSize, true); end.setUint32(16, offset, true);
+    const all = [...parts, ...central, new Uint8Array(end.buffer)];
+    const out = new Uint8Array(all.reduce((a, x) => a + x.length, 0));
+    let pos = 0;
+    for (const x of all) { out.set(x, pos); pos += x.length; }
+    return out;
+  }
+  const xlsxCol = (i) => { let s = ""; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
+  const xmlEsc = (v) => String(v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  // Células: { v, st } com st = "m" (dinheiro), "p" (porcentagem), "d" (data), "h" (cabeçalho) ou nada.
+  function xlsxSheet(rows) {
+    const widths = [];
+    const body = rows
+      .map((row, ri) => {
+        const cells = row
+          .map((c, ci) => {
+            if (c == null || c.v == null || c.v === "") return "";
+            const ref = xlsxCol(ci) + (ri + 1);
+            widths[ci] = Math.min(60, Math.max(widths[ci] || 8, String(c.st === "m" ? Number(c.v).toFixed(2) : c.v).length + 3));
+            if (typeof c.v === "number" || c.st === "m" || c.st === "p" || c.st === "d") {
+              const si = { m: 1, p: 3, d: 4 }[c.st] || 0;
+              return `<c r="${ref}"${si ? ` s="${si}"` : ""}><v>${Number(c.v)}</v></c>`;
+            }
+            return `<c r="${ref}"${c.st === "h" ? ' s="2"' : ""} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(c.v)}</t></is></c>`;
+          })
+          .join("");
+        return `<row r="${ri + 1}">${cells}</row>`;
+      })
+      .join("");
+    const cols = widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("");
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${cols}</cols><sheetData>${body}</sheetData></worksheet>`;
+  }
+  function buildXlsx(sheets) {
+    const enc = new TextEncoder();
+    const X = (s) => enc.encode(s);
+    const head = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+    const files = [
+      { name: "[Content_Types].xml", data: X(`${head}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>${sheets.map((_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join("")}</Types>`) },
+      { name: "_rels/.rels", data: X(`${head}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`) },
+      { name: "xl/workbook.xml", data: X(`${head}<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((s, i) => `<sheet name="${xmlEsc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join("")}</sheets></workbook>`) },
+      { name: "xl/_rels/workbook.xml.rels", data: X(`${head}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join("")}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`) },
+      { name: "xl/styles.xml", data: X(`${head}<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="5"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="4" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="10" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`) },
+      ...sheets.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: X(xlsxSheet(s.rows)) })),
+    ];
+    return zipStore(files);
+  }
+
+  function exportXlsx() {
+    const H = (...labels) => labels.map((v) => ({ v, st: "h" }));
+    const money = (v) => (v == null ? null : { v: Number(v), st: "m" });
+    const ml = (iso) => `${MONTHS_SHORT[monthOf(iso) - 1]}/${String(iso).slice(0, 4)}`;
+    const serial = (iso) => (iso ? { v: Math.round((Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) - Date.UTC(1899, 11, 30)) / 86400000), st: "d" } : null);
+    const yn = (b) => ({ v: b ? "Sim" : "Não" });
+    const catName = Object.fromEntries(fin.cats.map((c) => [c.id, c.name]));
+
+    const list = allMonths();
+    const resumo = [H("Mês", "Faturado", "Recebido", "Imposto", "Despesas planejadas", "Despesas executadas", "Lucro projetado", "Lucro realizado", "Distribuído aos sócios")];
+    list.forEach((c, i) => resumo.push([{ v: `${MONTHS_SHORT[i]}/${fin.year}` }, money(c.billed), money(c.received), money(c.taxUsed), money(c.planned), money(c.executed), money(c.profitPlanned), money(c.profit), money(c.distributed)]));
+    const tot = sumCalc(list);
+    resumo.push([{ v: "Ano", st: "h" }, money(tot.billed), money(tot.received), money(tot.taxUsed), money(tot.planned), money(tot.executed), money(tot.profitPlanned), money(tot.profit), money(tot.distributed)]);
+
+    const rec = [H("Mês", "Cliente", "Faturado", "Recebido", "Dia da NF", "NF enviada", "Fixa", "Observação")];
+    fin.revenues.forEach((r) => rec.push([{ v: ml(r.month) }, { v: r.client }, money(r.billed), money(r.received), r.invoice_day != null ? { v: Number(r.invoice_day) } : null, yn(r.invoice_ok), yn(r.is_fixed), r.note ? { v: r.note } : null]));
+    const desp = [H("Mês", "Tipo", "Descrição", "Planejado", "Executado", "Pago por (reembolsável)", "Fixa", "Observação")];
+    fin.expenses.forEach((e) => desp.push([{ v: ml(e.month) }, { v: catName[e.category_id] || "" }, { v: e.description }, money(e.planned), money(e.executed), e.paid_by ? { v: e.paid_by } : null, yn(e.is_fixed), e.note ? { v: e.note } : null]));
+    const dist = [H("Mês", "Sócio", "Valor", "Pago em", "Observação")];
+    fin.dists.forEach((d) => dist.push([{ v: ml(d.month) }, { v: d.partner }, money(d.amount), serial(d.paid_on), d.note ? { v: d.note } : null]));
+    const res = [H("Mês", "Nome", "Valor", "Observação")];
+    fin.reserves.forEach((r) => res.push([{ v: ml(r.month) }, { v: r.name }, money(r.amount), r.note ? { v: r.note } : null]));
+    const bon = [H("Período", "Pessoa", "Base (salário médio)", "Individual (pontos de 60)", "Meta financeira (pontos de 40)", "Bônus em salários (máx. 3)", "Valor do bônus", "Observação")];
+    fin.bonus.forEach((b) => {
+      const c = calcBonus(b);
+      bon.push([{ v: b.period }, { v: b.person }, money(b.base), c.individual != null ? { v: Math.round(c.individual * 1000) / 10 } : null, c.individual != null ? { v: Math.round(c.finPart * 1000) / 10 } : null, c.mult != null ? { v: Math.round(c.mult * (Number(b.max_multiple) || 3) * 100) / 100 } : null, money(c.value), b.note ? { v: b.note } : null]);
+    });
+
+    const bytes = buildXlsx([
+      { name: `Resumo ${fin.year}`, rows: resumo },
+      { name: "Receitas", rows: rec },
+      { name: "Despesas", rows: desp },
+      { name: "Distribuições", rows: dist },
+      { name: "Reservas", rows: res },
+      { name: "Bônus", rows: bon },
+    ]);
+    const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `financeiro-${fin.year}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+    flash(`Planilha gerada: financeiro-${fin.year}.xlsx (dados de ${fin.year}; o bônus inclui todos os períodos).`);
+  }
 
   async function renderFinance() {
     const root = $("fin-root");
