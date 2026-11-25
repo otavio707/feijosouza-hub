@@ -1914,3 +1914,10 @@ on conflict (key) do nothing;
 alter table public.fin_expenses
   add column if not exists paid_by text check (paid_by is null or char_length(paid_by) between 1 and 80),
   add column if not exists reimbursed_on date;
+
+-- ============================================================================
+-- 36. Financeiro: marca de despesa/receita fixa (se repete todo mês)
+-- ============================================================================
+-- Usada pelo botão "Copiar fixas para os meses seguintes" e pela planilha exportada.
+alter table public.fin_expenses add column if not exists is_fixed boolean not null default false;
+alter table public.fin_revenues add column if not exists is_fixed boolean not null default false;
