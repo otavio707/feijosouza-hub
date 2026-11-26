@@ -73,6 +73,7 @@
     months: [],
     dists: [],
     reserves: [],
+    fund: null, // último saldo do fundo de reserva (independe do ano aberto)
     yearGoal: null,
     proj: [],
     bonus: [],
@@ -157,13 +158,14 @@
     const y = fin.year;
     const from = monthIso(y, 1);
     const to = monthIso(y + 1, 1);
-    const [cats, revenues, expenses, months, dists, reserves, goals, proj, bonus, settings] = await Promise.all([
+    const [cats, revenues, expenses, months, dists, reserves, fundRows, goals, proj, bonus, settings] = await Promise.all([
       fetchAll(() => sb.from("fin_categories").select("*").order("sort_order").order("name")),
       fetchAll(() => sb.from("fin_revenues").select("*").gte("month", from).lt("month", to).order("month").order("id")),
       fetchAll(() => sb.from("fin_expenses").select("*").gte("month", from).lt("month", to).order("month").order("id")),
       fetchAll(() => sb.from("fin_months").select("*").gte("month", from).lt("month", to).order("month")),
       fetchAll(() => sb.from("fin_distributions").select("*").gte("month", from).lt("month", to).order("month").order("id")),
       fetchAll(() => sb.from("fin_reserves").select("*").gte("month", from).lt("month", to).order("month").order("id")),
+      fetchAll(() => sb.from("fin_reserves").select("month,name,amount").ilike("name", "fundo de reserva%").order("month")),
       sb.from("fin_year_goals").select("*").eq("year", y).maybeSingle(),
       fetchAll(() => sb.from("fin_projections").select("*").eq("year", y).order("month_num")),
       fetchAll(() => sb.from("fin_bonus").select("*").order("id")),
@@ -176,6 +178,7 @@
     fin.months = months;
     fin.dists = dists;
     fin.reserves = reserves;
+    fin.fund = fundRows.length ? fundRows.reduce((a, b) => (String(b.month) >= String(a.month) ? b : a)) : null;
     fin.yearGoal = goals.data || null;
     fin.proj = proj;
     fin.bonus = bonus;
@@ -379,7 +382,12 @@
 
     const missing = c.goal != null ? r2(c.goal - c.received) : null;
     const taxLabel = c.taxIsEstimate ? "Imposto (estimado)" : "Imposto (pago)";
-    const cards = `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+    const fundBox = `<div class="mb-3">${
+      fin.fund
+        ? card("Fundo de reserva", money(fin.fund.amount), `Saldo de ${MONTHS[monthOf(fin.fund.month) - 1].toLowerCase()} de ${String(fin.fund.month).slice(0, 4)}`)
+        : card("Fundo de reserva", "—", "Lance o saldo em “Distribuições e reservas”")
+    }</div>`;
+    const cards = fundBox + `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
       ${card("Faturado", money(c.billed), `Imposto previsto ${money(c.taxPlanned)}`)}
       ${card("Recebido", money(c.received), c.billed ? `${pctFmt(c.received / c.billed)} do faturado` : "")}
       ${card("Meta de receita do mês", c.goal != null ? money(c.goal) : "—", missing != null ? (missing > 0 ? `Faltam ${money(missing)}` : `Meta superada em ${money(-missing)}`) : "Defina em “Ajustar o mês”")}
