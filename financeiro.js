@@ -382,12 +382,12 @@
 
     const missing = c.goal != null ? r2(c.goal - c.received) : null;
     const taxLabel = c.taxIsEstimate ? "Imposto (estimado)" : "Imposto (pago)";
-    const fundBox = `<div class="mb-3">${
+    const fundBox = `<div class="mb-4">${
       fin.fund
         ? card("Fundo de reserva", money(fin.fund.amount), `Saldo de ${MONTHS[monthOf(fin.fund.month) - 1].toLowerCase()} de ${String(fin.fund.month).slice(0, 4)}`)
         : card("Fundo de reserva", "—", "Lance o saldo em “Distribuições e reservas”")
     }</div>`;
-    const cards = fundBox + `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+    const cards = `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
       ${card("Faturado", money(c.billed), `Imposto previsto ${money(c.taxPlanned)}`)}
       ${card("Recebido", money(c.received), c.billed ? `${pctFmt(c.received / c.billed)} do faturado` : "")}
       ${card("Meta de receita do mês", c.goal != null ? money(c.goal) : "—", missing != null ? (missing > 0 ? `Faltam ${money(missing)}` : `Meta superada em ${money(-missing)}`) : "Defina em “Ajustar o mês”")}
@@ -397,7 +397,7 @@
       ${card("Lucro projetado", money(c.profitPlanned), "faturado − imposto − planejado", signCls(c.profitPlanned))}
       ${card("Lucro realizado", money(c.profit), "recebido − imposto − executado", signCls(c.profit))}
     </div>
-    <p class="text-sm text-brand-slate mb-4">Divisão do lucro realizado: ${partners.map((p) => `${esc(p)} <strong class="text-brand-navy tabular-nums ${signCls(c.profit)}">${money(r2(c.profit * share))}</strong>`).join(" · ")} · distribuído no mês: <strong class="text-brand-navy tabular-nums">${money(c.distributed)}</strong>${c.row?.note ? `<br><span class="text-xs">Observação do mês: ${esc(c.row.note)}</span>` : ""}</p>`;
+    <p class="text-sm text-brand-slate mb-4">Divisão do lucro realizado: ${partners.map((p) => `${esc(p)} <strong class="text-brand-navy tabular-nums ${signCls(c.profit)}">${money(r2(c.profit * share))}</strong>`).join(" · ")} · distribuído no mês: <strong class="text-brand-navy tabular-nums">${money(c.distributed)}</strong>${c.row?.note ? `<br><span class="text-xs">Observação do mês: ${esc(c.row.note)}</span>` : ""}</p>` + fundBox;
 
     // Receitas
     const revRows = c.revs
